@@ -1,0 +1,16 @@
+[Unit]
+Description=NeoTranscoder multicast transcoder manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=neotranscoder
+Group=neotranscoder
+ExecStart=/usr/local/bin/neotranscoder serve --config /etc/neotranscoder/config.json
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

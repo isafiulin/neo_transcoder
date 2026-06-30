@@ -1,0 +1,17 @@
+{
+  "server": {
+    "bind": "0.0.0.0",
+    "port": 8080
+  },
+  "ffmpeg": {
+    "path": "/usr/bin/ffmpeg",
+    "ffprobe_path": "/usr/bin/ffprobe"
+  },
+  "storage": {
+    "path": "/var/lib/neotranscoder/neotranscoder.db"
+  },
+  "logs": {
+    "level": "info",
+    "path": "/var/log/neotranscoder/neotranscoder.log"
+  }
+}
