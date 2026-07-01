@@ -2,3 +2,5 @@
 dist/
 *.db
 *.log
+ui/.dart_tool/
+ui/build/

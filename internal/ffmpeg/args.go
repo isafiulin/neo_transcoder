@@ -13,28 +13,28 @@ type Stream struct {
 }
 
 type Profile struct {
-	Name   string
-	Video  VideoProfile
-	Audio  AudioProfile
-	Output OutputProfile
+	Name   string        `json:"name"`
+	Video  VideoProfile  `json:"video"`
+	Audio  AudioProfile  `json:"audio"`
+	Output OutputProfile `json:"output"`
 }
 
 type VideoProfile struct {
-	Codec   string
-	Preset  string
-	Bitrate string
-	Maxrate string
-	Bufsize string
-	Tune    string
+	Codec   string `json:"codec"`
+	Preset  string `json:"preset,omitempty"`
+	Bitrate string `json:"bitrate,omitempty"`
+	Maxrate string `json:"maxrate,omitempty"`
+	Bufsize string `json:"bufsize,omitempty"`
+	Tune    string `json:"tune,omitempty"`
 }
 
 type AudioProfile struct {
-	Codec   string
-	Bitrate string
+	Codec   string `json:"codec"`
+	Bitrate string `json:"bitrate,omitempty"`
 }
 
 type OutputProfile struct {
-	Format string
+	Format string `json:"format"`
 }
 
 func H264VeryFast4M() Profile {
@@ -88,6 +88,8 @@ func BuildArgs(stream Stream, profile Profile) ([]string, error) {
 	args := []string{
 		"-hide_banner",
 		"-nostdin",
+		"-progress", "pipe:1",
+		"-stats_period", "1",
 		"-i", stream.InputURL,
 		"-map", videoMap,
 		"-map", audioMap,

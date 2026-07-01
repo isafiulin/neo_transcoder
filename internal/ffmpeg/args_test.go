@@ -16,6 +16,8 @@ func TestBuildArgsH264(t *testing.T) {
 	want := []string{
 		"-hide_banner",
 		"-nostdin",
+		"-progress", "pipe:1",
+		"-stats_period", "1",
 		"-i", "udp://239.1.1.1:1234?localaddr=10.0.0.5",
 		"-map", "0:v:0",
 		"-map", "0:a:0?",

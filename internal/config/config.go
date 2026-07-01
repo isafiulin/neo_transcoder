@@ -13,6 +13,7 @@ const DefaultPath = "/etc/neotranscoder/config.json"
 
 type Config struct {
 	Server  ServerConfig  `json:"server"`
+	Auth    AuthConfig    `json:"auth"`
 	FFmpeg  FFmpegConfig  `json:"ffmpeg"`
 	Storage StorageConfig `json:"storage"`
 	Logs    LogsConfig    `json:"logs"`
@@ -21,6 +22,10 @@ type Config struct {
 type ServerConfig struct {
 	Bind string `json:"bind"`
 	Port int    `json:"port"`
+}
+
+type AuthConfig struct {
+	Token string `json:"token"`
 }
 
 type FFmpegConfig struct {
@@ -43,12 +48,15 @@ func Default() Config {
 			Bind: "0.0.0.0",
 			Port: 8080,
 		},
+		Auth: AuthConfig{
+			Token: "",
+		},
 		FFmpeg: FFmpegConfig{
 			Path:        "/usr/bin/ffmpeg",
 			FFprobePath: "/usr/bin/ffprobe",
 		},
 		Storage: StorageConfig{
-			Path: "/var/lib/neotranscoder/neotranscoder.db",
+			Path: "/var/lib/neotranscoder/state.json",
 		},
 		Logs: LogsConfig{
 			Level: "info",

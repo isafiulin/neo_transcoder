@@ -1,0 +1,10 @@
+{
+  "name": "NeoTranscoder",
+  "short_name": "NeoTranscoder",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#f6f7f9",
+  "theme_color": "#1f6f78",
+  "description": "NeoTranscoder web management UI",
+  "orientation": "any"
+}

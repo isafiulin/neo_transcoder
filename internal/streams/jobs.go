@@ -1,10 +1,14 @@
 package streams
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,8 +20,9 @@ type JobManager struct {
 	store      *Store
 	log        *slog.Logger
 
-	mu   sync.Mutex
-	jobs map[string]*job
+	mu       sync.Mutex
+	jobs     map[string]*job
+	restarts map[string]restartTracker
 }
 
 type job struct {
@@ -27,19 +32,34 @@ type job struct {
 	done     chan struct{}
 }
 
+type restartTracker struct {
+	firstFailure time.Time
+	attempts     int
+}
+
 func NewJobManager(ffmpegPath string, store *Store, log *slog.Logger) *JobManager {
 	return &JobManager{
 		ffmpegPath: ffmpegPath,
 		store:      store,
 		log:        log,
 		jobs:       make(map[string]*job),
+		restarts:   make(map[string]restartTracker),
 	}
 }
 
 func (m *JobManager) Start(id string) error {
+	return m.start(id, false)
+}
+
+func (m *JobManager) start(id string, restarted bool) error {
 	view, ok := m.store.Get(id)
 	if !ok {
 		return fmt.Errorf("stream not found")
+	}
+
+	profile, ok := m.store.GetProfile(view.Config.ProfileName)
+	if !ok {
+		return fmt.Errorf("profile %q not found", view.Config.ProfileName)
 	}
 
 	args, err := ffmpeg.BuildArgs(ffmpeg.Stream{
@@ -47,7 +67,7 @@ func (m *JobManager) Start(id string) error {
 		OutputURL: view.Config.OutputURL,
 		VideoMap:  view.Config.VideoMap,
 		AudioMap:  view.Config.AudioMap,
-	}, profileByName(view.Config.ProfileName))
+	}, profile)
 	if err != nil {
 		return err
 	}
@@ -60,28 +80,58 @@ func (m *JobManager) Start(id string) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, m.ffmpegPath, args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		m.mu.Unlock()
+		return err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		cancel()
+		m.mu.Unlock()
+		return err
+	}
 	if err := cmd.Start(); err != nil {
 		cancel()
 		m.mu.Unlock()
 		m.store.UpdateState(id, func(state State) State {
 			state.Status = "error"
+			state.ErrorCode = classifyError(err.Error())
 			state.LastError = err.Error()
 			return state
 		})
 		return err
 	}
 
-	m.jobs[id] = &job{cancel: cancel, cmd: cmd, done: make(chan struct{})}
+	runningJob := &job{cancel: cancel, cmd: cmd, done: make(chan struct{})}
+	m.jobs[id] = runningJob
+	if !restarted {
+		delete(m.restarts, id)
+	}
 	m.mu.Unlock()
 
 	started := time.Now()
-	m.store.SetState(id, State{
-		Status:    "running",
-		PID:       cmd.Process.Pid,
-		StartedAt: &started,
+	m.store.UpdateState(id, func(state State) State {
+		state.Status = "running"
+		state.PID = cmd.Process.Pid
+		state.StartedAt = &started
+		state.StoppedAt = nil
+		state.LastError = ""
+		state.ErrorCode = ""
+		state.Flapping = false
+		state.Metrics = nil
+		state.Process = nil
+		if restarted {
+			state.RestartCount++
+		}
+		return state
 	})
 	m.log.Info("stream started", "id", id, "pid", cmd.Process.Pid)
 
+	go m.captureProgress(id, stdout)
+	go m.captureStderr(id, stderr)
+	go m.monitorProcess(id, cmd.Process.Pid, runningJob.done)
 	go m.wait(id, cmd)
 	return nil
 }
@@ -91,6 +141,7 @@ func (m *JobManager) Stop(id string) error {
 	running, ok := m.jobs[id]
 	if ok {
 		running.stopping = true
+		delete(m.restarts, id)
 	}
 	m.mu.Unlock()
 	if !ok {
@@ -142,27 +193,207 @@ func (m *JobManager) wait(id string, cmd *exec.Cmd) {
 	}
 
 	stopped := time.Now()
-	m.store.UpdateState(id, func(state State) State {
+	manualStop := current != nil && current.stopping
+	next := m.store.UpdateState(id, func(state State) State {
 		state.PID = 0
 		state.StoppedAt = &stopped
-		if current != nil && current.stopping {
+		if manualStop {
 			state.Status = "stopped"
+			state.ErrorCode = ""
 			state.LastError = ""
+			state.Process = nil
 		} else if err != nil {
 			state.Status = "error"
-			state.LastError = err.Error()
+			if state.ErrorCode == "" {
+				state.ErrorCode = ErrorProcessExit
+			}
+			if state.LastError == "" {
+				state.LastError = err.Error()
+			}
+			state.Process = nil
 		} else {
 			state.Status = "stopped"
+			state.ErrorCode = ""
 			state.LastError = ""
+			state.Process = nil
 		}
 		return state
 	})
 	if err != nil {
 		m.log.Warn("stream exited", "id", id, "error", err)
 	}
+	if err != nil && !manualStop {
+		m.maybeRestart(id, next.LastError)
+	}
 }
 
-func profileByName(name string) ffmpeg.Profile {
-	// ponytail: v0 ships one profile; upgrade path is persisted profile CRUD.
-	return ffmpeg.H264VeryFast4M()
+func (m *JobManager) captureStderr(id string, stderr io.Reader) {
+	scanner := bufio.NewScanner(stderr)
+	for scanner.Scan() {
+		line := scanner.Text()
+		code := classifyError(line)
+		level := "info"
+		if code != "" && code != ErrorUnknown {
+			level = "error"
+			m.store.UpdateState(id, func(state State) State {
+				state.ErrorCode = code
+				state.LastError = line
+				return state
+			})
+		}
+		m.store.AppendLogCode(id, level, code, line)
+	}
+	if err := scanner.Err(); err != nil {
+		m.store.AppendLogCode(id, "warn", classifyError(err.Error()), err.Error())
+	}
+}
+
+func (m *JobManager) maybeRestart(id, reason string) {
+	view, ok := m.store.Get(id)
+	if !ok || !view.Config.Enabled || view.Config.Restart == nil || !view.Config.Restart.Enabled {
+		return
+	}
+
+	policy := *view.Config.Restart
+	now := time.Now()
+
+	m.mu.Lock()
+	tracker := m.restarts[id]
+	if tracker.firstFailure.IsZero() || now.Sub(tracker.firstFailure) > time.Duration(policy.WindowSeconds)*time.Second {
+		tracker = restartTracker{firstFailure: now}
+	}
+	tracker.attempts++
+	m.restarts[id] = tracker
+	attempts := tracker.attempts
+	m.mu.Unlock()
+
+	if attempts > policy.MaxAttempts {
+		m.store.UpdateState(id, func(state State) State {
+			state.Status = "flapping"
+			state.Flapping = true
+			state.ErrorCode = ErrorProcessExit
+			state.LastError = reason
+			return state
+		})
+		m.store.AppendLogCode(id, "error", ErrorProcessExit, "restart limit reached; stream marked as flapping")
+		return
+	}
+
+	backoff := time.Duration(policy.BackoffSeconds) * time.Second
+	m.store.UpdateState(id, func(state State) State {
+		state.Status = "restarting"
+		state.ErrorCode = ErrorProcessExit
+		state.LastError = reason
+		return state
+	})
+
+	go func() {
+		time.Sleep(backoff)
+		view, ok := m.store.Get(id)
+		if !ok || !view.Config.Enabled {
+			return
+		}
+		if err := m.start(id, true); err != nil {
+			m.store.AppendLogCode(id, "error", classifyError(err.Error()), fmt.Sprintf("restart failed: %v", err))
+			m.maybeRestart(id, err.Error())
+		}
+	}()
+}
+
+func (m *JobManager) monitorProcess(id string, pid int, done <-chan struct{}) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	var previous procSample
+	var previousAt time.Time
+	for {
+		select {
+		case <-done:
+			return
+		case now := <-ticker.C:
+			current, err := readProcSample(pid)
+			if err != nil {
+				return
+			}
+
+			process := Process{
+				MemoryBytes: current.rssBytes,
+				UpdatedAt:   now,
+			}
+			if !previousAt.IsZero() {
+				elapsed := now.Sub(previousAt).Seconds()
+				if elapsed > 0 {
+					// ponytail: Linux USER_HZ is assumed to be 100; upgrade path is sysconf via x/sys/unix if kernels need it.
+					process.CPUPercent = float64(current.cpuTicks-previous.cpuTicks) / linuxClockTicksPerSecond / elapsed * 100
+				}
+			}
+
+			m.store.UpdateState(id, func(state State) State {
+				state.Process = &process
+				return state
+			})
+			previous = current
+			previousAt = now
+		}
+	}
+}
+
+func (m *JobManager) captureProgress(id string, stdout io.Reader) {
+	scanner := bufio.NewScanner(stdout)
+	fields := make(map[string]string)
+	for scanner.Scan() {
+		line := scanner.Text()
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		fields[key] = value
+		if key == "progress" {
+			metrics := parseProgress(fields)
+			m.store.UpdateState(id, func(state State) State {
+				state.Metrics = &metrics
+				return state
+			})
+			fields = make(map[string]string)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		m.store.AppendLogCode(id, "warn", classifyError(err.Error()), err.Error())
+	}
+}
+
+func parseProgress(fields map[string]string) Metrics {
+	return Metrics{
+		Frame:     parseInt(fields["frame"]),
+		FPS:       parseFloat(fields["fps"]),
+		Bitrate:   fields["bitrate"],
+		TotalSize: parseInt(fields["total_size"]),
+		OutTime:   fields["out_time"],
+		OutTimeMS: parseInt(fields["out_time_ms"]),
+		Speed:     fields["speed"],
+		Progress:  fields["progress"],
+		UpdatedAt: time.Now(),
+	}
+}
+
+func parseInt(value string) int64 {
+	if value == "" || value == "N/A" {
+		return 0
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
+func parseFloat(value string) float64 {
+	if value == "" || value == "N/A" {
+		return 0
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0
+	}
+	return parsed
 }

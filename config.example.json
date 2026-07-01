@@ -3,12 +3,15 @@
     "bind": "0.0.0.0",
     "port": 8080
   },
+  "auth": {
+    "token": ""
+  },
   "ffmpeg": {
     "path": "/usr/bin/ffmpeg",
     "ffprobe_path": "/usr/bin/ffprobe"
   },
   "storage": {
-    "path": "/var/lib/neotranscoder/neotranscoder.db"
+    "path": "/var/lib/neotranscoder/state.json"
   },
   "logs": {
     "level": "info",

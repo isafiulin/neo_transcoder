@@ -71,6 +71,48 @@ The daemon is responsible for:
 The web UI is a client of the API. It does not touch Linux services or FFmpeg
 directly.
 
+## Web UI
+
+The management UI is a Flutter Web application embedded into the Go binary.
+
+UI stack:
+
+```text
+Flutter Web
+Dio
+go_router
+Path URL strategy
+Material widgets
+```
+
+The UI uses a light operator-dashboard style: white surfaces, restrained
+tables, compact controls, and NeoTelecom blue as the primary color.
+
+Main UI workflows:
+
+- live dashboard with stream status, media metrics, and process metrics;
+- stream create/edit/delete;
+- stream start/stop/restart;
+- input stream probe;
+- FFmpeg command preview;
+- profile create/edit/delete;
+- recent logs with filtering;
+- service settings overview.
+
+Source layout:
+
+```text
+ui/lib/app
+ui/lib/core/api
+ui/lib/core/design_system
+ui/lib/core/widgets
+ui/lib/features/dashboard
+ui/lib/features/streams
+ui/lib/features/profiles
+ui/lib/features/logs
+ui/lib/features/settings
+```
+
 ## Filesystem Layout
 
 Default Linux layout:
@@ -79,7 +121,7 @@ Default Linux layout:
 /usr/local/bin/neotranscoder
 /etc/systemd/system/neotranscoder.service
 /etc/neotranscoder/config.json
-/var/lib/neotranscoder/neotranscoder.db
+/var/lib/neotranscoder/state.json
 /var/log/neotranscoder/
 ```
 
@@ -104,12 +146,15 @@ Example:
     "bind": "0.0.0.0",
     "port": 8080
   },
+  "auth": {
+    "token": "change-me"
+  },
   "ffmpeg": {
     "path": "/usr/bin/ffmpeg",
     "ffprobe_path": "/usr/bin/ffprobe"
   },
   "storage": {
-    "path": "/var/lib/neotranscoder/neotranscoder.db"
+    "path": "/var/lib/neotranscoder/state.json"
   },
   "logs": {
     "level": "info",
@@ -130,6 +175,16 @@ Write a default config:
 neotranscoder config write-default --config /etc/neotranscoder/config.json
 ```
 
+If `auth.token` is empty, API authentication is disabled. For production,
+set a long random token and use it in the web login screen or curl requests:
+
+```sh
+curl -H "Authorization: Bearer <token>" http://server:8080/api/streams
+```
+
+The web login screen stores the token in browser local storage. If auth is
+disabled in the daemon config, the UI can continue without a token.
+
 ## System Service
 
 NeoTranscoder is designed to run as a systemd service:
@@ -148,6 +203,122 @@ journalctl -u neotranscoder -f
 ```
 
 ## Installation
+
+A Linux host must have a few system prerequisites before installing
+NeoTranscoder.
+
+### Supported Host
+
+Initial production target:
+
+```text
+Linux amd64
+systemd
+FFmpeg
+ffprobe
+```
+
+Check CPU architecture:
+
+```sh
+uname -m
+```
+
+Expected value for Intel Xeon servers:
+
+```text
+x86_64
+```
+
+Check systemd:
+
+```sh
+systemctl --version
+```
+
+Check FFmpeg:
+
+```sh
+ffmpeg -version
+ffprobe -version
+```
+
+### Install Dependencies On Debian Or Ubuntu
+
+```sh
+sudo apt-get update
+sudo apt-get install -y ffmpeg ca-certificates curl
+```
+
+Useful diagnostics tools:
+
+```sh
+sudo apt-get install -y iproute2 net-tools tcpdump
+```
+
+### Install Dependencies On RHEL, Rocky, AlmaLinux, Or CentOS Stream
+
+Enable EPEL and RPM Fusion/CRB repositories as required by your distribution,
+then install FFmpeg.
+
+Rocky/AlmaLinux 9 example:
+
+```sh
+sudo dnf install -y epel-release
+sudo dnf config-manager --set-enabled crb
+sudo dnf install -y https://mirrors.rpmfusion.org/free/el/rpmfusion-free-release-9.noarch.rpm
+sudo dnf install -y ffmpeg ffmpeg-devel ca-certificates curl
+```
+
+Useful diagnostics tools:
+
+```sh
+sudo dnf install -y iproute tcpdump net-tools
+```
+
+### Multicast Host Checks
+
+NeoTranscoder does not configure multicast routing for the host. Before running
+production streams, verify the server can receive the input multicast group and
+send to the output multicast group on the expected interface.
+
+Show interfaces:
+
+```sh
+ip addr
+```
+
+Show routes:
+
+```sh
+ip route
+```
+
+Inspect multicast traffic on an interface:
+
+```sh
+sudo tcpdump -ni eth0 udp
+```
+
+Replace `eth0` with the actual network interface.
+
+If the host has multiple interfaces, use FFmpeg URLs with `localaddr` where
+needed:
+
+```text
+udp://239.1.1.1:1234?localaddr=10.0.0.5
+```
+
+### FFmpeg Smoke Check
+
+Probe an input stream:
+
+```sh
+ffprobe -v error -show_streams -show_format -print_format json "udp://239.1.1.1:1234?localaddr=10.0.0.5"
+```
+
+If this command does not see the stream, fix host networking before debugging
+NeoTranscoder.
 
 A release bundle contains:
 
@@ -218,7 +389,11 @@ Health and diagnostics:
 
 ```text
 GET    /api/health
+GET    /api/auth/required
 GET    /api/doctor
+GET    /api/events
+GET    /api/metrics
+GET    /api/logs
 ```
 
 Probe input stream:
@@ -232,6 +407,39 @@ Request:
 ```json
 {
   "input_url": "udp://239.1.1.1:1234?localaddr=10.0.0.5"
+}
+```
+
+Profiles:
+
+```text
+GET    /api/profiles
+POST   /api/profiles
+GET    /api/profiles/{name}
+PUT    /api/profiles/{name}
+DELETE /api/profiles/{name}
+```
+
+Create or update a profile:
+
+```json
+{
+  "name": "h264_fast_6m",
+  "video": {
+    "codec": "libx264",
+    "preset": "fast",
+    "tune": "zerolatency",
+    "bitrate": "6000k",
+    "maxrate": "6000k",
+    "bufsize": "12000k"
+  },
+  "audio": {
+    "codec": "aac",
+    "bitrate": "128k"
+  },
+  "output": {
+    "format": "mpegts"
+  }
 }
 ```
 
@@ -252,6 +460,7 @@ POST   /api/streams/{id}/start
 POST   /api/streams/{id}/stop
 POST   /api/streams/{id}/restart
 GET    /api/streams/{id}/ffmpeg-command
+GET    /api/streams/{id}/logs
 ```
 
 Create or update a stream:
@@ -263,12 +472,113 @@ Create or update a stream:
   "input_url": "udp://239.1.1.1:1234?localaddr=10.0.0.5",
   "output_url": "udp://239.2.2.2:1234?pkt_size=1316",
   "profile_name": "h264_veryfast_4m",
-  "enabled": true
+  "enabled": true,
+  "restart": {
+    "enabled": true,
+    "max_attempts": 5,
+    "window_seconds": 300,
+    "backoff_seconds": 5
+  }
 }
 ```
 
-The current implementation keeps stream definitions in memory. Persistent local
-storage is planned through the existing `storage.path` setting.
+Profiles and stream definitions are persisted in the local JSON state file
+configured by `storage.path`. Runtime process state such as PID and current
+errors is rebuilt when the daemon starts.
+
+If an FFmpeg process exits unexpectedly and the stream is enabled, NeoTranscoder
+can restart it with a small backoff. If the process exceeds `max_attempts`
+inside `window_seconds`, the stream is marked as `flapping` and automatic
+restarts stop until an operator starts the stream again.
+
+Automatic restart can be disabled per stream:
+
+```json
+{
+  "restart": {
+    "enabled": false
+  }
+}
+```
+
+Live events are exposed through Server-Sent Events:
+
+```text
+GET /api/events
+```
+
+Event payload shape:
+
+```json
+{
+  "type": "stream_state",
+  "stream_id": "channel_1",
+  "time": "2026-06-30T12:00:00Z",
+  "payload": {
+    "status": "running",
+    "pid": 12345
+  }
+}
+```
+
+Recent logs are kept in memory for fast UI access:
+
+```text
+GET /api/logs?limit=200
+GET /api/streams/channel_1/logs?limit=200
+```
+
+FFmpeg stderr lines are captured as stream log entries and also emitted through
+`/api/events` as `stream_log` events.
+
+Common errors are classified into stable codes for UI filtering and highlighting:
+
+```text
+process_exit
+input_error
+output_error
+bind_error
+network_error
+codec_error
+permission_error
+unknown_error
+```
+
+The stream state exposes the latest code as `error_code`. Log entries can also
+include `code` when a line matches a known error category.
+
+Runtime metrics are collected from FFmpeg's structured progress output:
+
+```text
+-progress pipe:1
+```
+
+The current metrics include:
+
+Media metrics:
+
+- frame;
+- fps;
+- bitrate;
+- total output size;
+- output time;
+- speed;
+- last progress state.
+
+Process metrics:
+
+- FFmpeg CPU percent;
+- FFmpeg RSS memory bytes.
+
+Snapshot endpoint:
+
+```text
+GET /api/metrics
+```
+
+Process metrics are read from Linux `/proc`. CPU percent is calculated from
+process CPU ticks between one-second samples. Values can exceed `100` when
+FFmpeg uses multiple CPU cores.
 
 ## Encoding Stack
 
@@ -289,6 +599,8 @@ Generated FFmpeg shape:
 ffmpeg
   -hide_banner
   -nostdin
+  -progress pipe:1
+  -stats_period 1
   -i udp://239.1.1.1:1234?localaddr=10.0.0.5
   -map 0:v:0
   -map 0:a:0?
@@ -313,6 +625,7 @@ they become product requirements.
 Requirements:
 
 - Go;
+- Flutter;
 - FFmpeg;
 - ffprobe.
 
@@ -323,6 +636,12 @@ go test ./...
 go run ./cmd/neotranscoder version
 go run ./cmd/neotranscoder config validate --config ./config.example.json
 go run ./cmd/neotranscoder serve --config ./config.example.json
+```
+
+Build the Flutter Web UI and embed it into the Go binary static assets:
+
+```sh
+./scripts/build-ui.sh
 ```
 
 Build a local release bundle:

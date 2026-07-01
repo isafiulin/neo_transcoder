@@ -60,7 +60,12 @@ func serve(args []string) int {
 	defer stop()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	if err := server.New(cfg, log).Run(ctx); err != nil {
+	srv, err := server.New(cfg, log)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := srv.Run(ctx); err != nil {
 		log.Error("server stopped", "error", err)
 		return 1
 	}
