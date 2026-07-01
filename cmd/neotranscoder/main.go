@@ -12,6 +12,7 @@ import (
 	"neotranscoder/internal/buildinfo"
 	"neotranscoder/internal/config"
 	"neotranscoder/internal/doctor"
+	"neotranscoder/internal/installer"
 	"neotranscoder/internal/server"
 )
 
@@ -32,6 +33,8 @@ func run(args []string) int {
 		return 0
 	case "doctor":
 		return runDoctor(args[1:])
+	case "init":
+		return runInit(args[1:])
 	case "config":
 		return runConfig(args[1:])
 	case "uninstall":
@@ -43,6 +46,25 @@ func run(args []string) int {
 		usage()
 		return 2
 	}
+}
+
+func runInit(args []string) int {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	port := fs.Int("port", 0, "web management port")
+	yes := fs.Bool("yes", false, "use defaults without prompts")
+	forceConfig := fs.Bool("force-config", false, "rewrite default config before applying options")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if err := installer.Run(installer.Options{
+		Port:        *port,
+		Yes:         *yes,
+		ForceConfig: *forceConfig,
+	}); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
 }
 
 func serve(args []string) int {
@@ -103,12 +125,14 @@ func runDoctor(args []string) int {
 
 func runConfig(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: neotranscoder config validate|write-default")
+		fmt.Fprintln(os.Stderr, "usage: neotranscoder config validate|write-default|set-server")
 		return 2
 	}
 
 	fs := flag.NewFlagSet("config "+args[0], flag.ContinueOnError)
 	configPath := fs.String("config", config.DefaultPath, "config file path")
+	bind := fs.String("bind", "", "server bind IP")
+	port := fs.Int("port", 0, "server port")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -123,6 +147,24 @@ func runConfig(args []string) int {
 		return 0
 	case "write-default":
 		if err := config.WriteDefault(*configPath); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Println(*configPath)
+		return 0
+	case "set-server":
+		cfg, err := config.Load(*configPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		if *bind != "" {
+			cfg.Server.Bind = *bind
+		}
+		if *port != 0 {
+			cfg.Server.Port = *port
+		}
+		if err := config.Write(*configPath, cfg); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -144,5 +186,5 @@ func runScript(path string, args []string) int {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: neotranscoder [serve|version|doctor|config|update|uninstall]")
+	fmt.Fprintln(os.Stderr, "usage: neotranscoder [serve|version|doctor|init|config|update|uninstall]")
 }

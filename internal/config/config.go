@@ -106,10 +106,20 @@ func WriteDefault(path string) error {
 	if path == "" {
 		path = DefaultPath
 	}
+	return Write(path, Default())
+}
+
+func Write(path string, cfg Config) error {
+	if path == "" {
+		path = DefaultPath
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(Default(), "", "  ")
+	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}

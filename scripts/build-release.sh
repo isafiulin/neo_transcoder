@@ -7,13 +7,16 @@ DATE=${DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
 OUT=${OUT:-dist/neotranscoder}
 GO=${GO:-go}
 BUILD_UI=${BUILD_UI:-1}
+GOOS=${GOOS:-$("$GO" env GOOS)}
+GOARCH=${GOARCH:-$("$GO" env GOARCH)}
+CGO_ENABLED=${CGO_ENABLED:-0}
 
 if [ "$BUILD_UI" = "1" ]; then
   ./scripts/build-ui.sh
 fi
 
 mkdir -p "$OUT"
-"$GO" build \
+env GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED="$CGO_ENABLED" "$GO" build \
   -ldflags "-X neotranscoder/internal/buildinfo.Version=$VERSION -X neotranscoder/internal/buildinfo.Commit=$COMMIT -X neotranscoder/internal/buildinfo.Date=$DATE" \
   -o "$OUT/neotranscoder" \
   ./cmd/neotranscoder

@@ -361,8 +361,46 @@ uninstall.sh
 Install:
 
 ```sh
-sudo ./install.sh
+sudo ./neotranscoder init
 ```
+
+The init command asks for the management web port. Press Enter to keep the
+default `8080`.
+
+Non-interactive install with the default port:
+
+```sh
+sudo ./neotranscoder init --yes
+```
+
+Install with a custom management web port:
+
+```sh
+sudo ./neotranscoder init --port 18080
+```
+
+NeoTranscoder binds to all server IP addresses on the selected port
+(`0.0.0.0:<port>`).
+
+If `/etc/neotranscoder/config.json` already exists, `--port` updates only the
+`server` section. To recreate the default config before applying the port:
+
+```sh
+sudo ./neotranscoder init --force-config --port 18080
+```
+
+The release still includes shell scripts for compatibility. If the executable
+bit is lost while copying the bundle, either run the binary-based installer
+above or restore permissions:
+
+```sh
+chmod +x neotranscoder install.sh update.sh uninstall.sh
+```
+
+The binary-based `init` command does not execute shell scripts. When the helper
+scripts are present next to the binary, it copies them into
+`/usr/local/lib/neotranscoder` so later `neotranscoder update` and
+`neotranscoder uninstall` commands keep working.
 
 The installer:
 
@@ -372,6 +410,8 @@ The installer:
 - creates `/var/lib/neotranscoder`;
 - creates `/var/log/neotranscoder`;
 - installs `neotranscoder.service`;
+- runs non-fatal `neotranscoder doctor` checklist for FFmpeg, ffprobe, storage,
+  and log paths;
 - enables and starts the service.
 
 The installer and service manager only operate on NeoTranscoder-owned paths:
