@@ -18,7 +18,7 @@ class ApiClient {
     _dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (RequestOptions options, RequestInterceptorHandler handler) {
-          final String? token = AuthStore.token;
+          final String? token = AuthStore.accessToken;
           if (token != null && token.isNotEmpty) {
             options.headers['Authorization'] = 'Bearer $token';
           }
@@ -28,21 +28,119 @@ class ApiClient {
     );
     _dio.interceptors.add(
       InterceptorsWrapper(
-        onError: (DioException error, ErrorInterceptorHandler handler) {
-          handler.reject(
-            DioException(
-              requestOptions: error.requestOptions,
-              response: error.response,
-              type: error.type,
-              error: ApiException(_messageFromDio(error)),
-            ),
-          );
+        onError: (DioException error, ErrorInterceptorHandler handler) async {
+          if (await _refreshAndRetry(error, handler)) {
+            return;
+          }
+          if (error.response?.statusCode == 401 && !error.requestOptions.path.startsWith('/auth/')) {
+            AuthStore.clear();
+            onUnauthorized?.call();
+          }
+          handler.reject(_apiException(error));
         },
       ),
     );
   }
 
   final Dio _dio;
+  void Function()? onUnauthorized;
+
+  Future<bool> _refreshAndRetry(DioException error, ErrorInterceptorHandler handler) async {
+    if (error.response?.statusCode != 401 ||
+        error.requestOptions.extra['retried'] == true ||
+        error.requestOptions.path.startsWith('/auth/')) {
+      return false;
+    }
+    final String? refreshToken = AuthStore.refreshToken;
+    if (refreshToken == null || refreshToken.isEmpty) {
+      return false;
+    }
+    try {
+      final Dio refreshClient = Dio(BaseOptions(baseUrl: '/api'));
+      final Response<Map<String, dynamic>> response = await refreshClient.post<Map<String, dynamic>>(
+        '/auth/refresh',
+        data: <String, Object?>{'refresh_token': refreshToken},
+      );
+      final AuthSession session = AuthSession.fromJson(response.data ?? <String, dynamic>{});
+      AuthStore.save(session);
+      final RequestOptions request = error.requestOptions;
+      request.extra['retried'] = true;
+      request.headers['Authorization'] = 'Bearer ${session.accessToken}';
+      handler.resolve(await _dio.fetch<dynamic>(request));
+      return true;
+    } on Object {
+      AuthStore.clear();
+      onUnauthorized?.call();
+      return false;
+    }
+  }
+
+  DioException _apiException(DioException error) {
+    return DioException(
+      requestOptions: error.requestOptions,
+      response: error.response,
+      type: error.type,
+      error: ApiException(_messageFromDio(error)),
+    );
+  }
+
+  Future<AuthSession> login(String username, String password) async {
+    AuthStore.clear();
+    final Response<Map<String, dynamic>> response = await _dio.post<Map<String, dynamic>>(
+      '/auth/login',
+      data: <String, Object?>{
+        'username': username,
+        'password': password,
+      },
+    );
+    final AuthSession session = AuthSession.fromJson(response.data ?? <String, dynamic>{});
+    AuthStore.save(session);
+    return session;
+  }
+
+  Future<UserAccount> verify() async {
+    final Response<Map<String, dynamic>> response = await _dio.get<Map<String, dynamic>>('/auth/verify');
+    return UserAccount.fromJson(response.data?['user'] as Map<String, dynamic>? ?? <String, dynamic>{});
+  }
+
+  Future<void> changePassword(String currentPassword, String newPassword) async {
+    await _dio.post<void>(
+      '/auth/change-password',
+      data: <String, Object?>{
+        'current_password': currentPassword,
+        'new_password': newPassword,
+      },
+    );
+    AuthStore.clear();
+  }
+
+  Future<List<UserAccount>> users() async {
+    final Response<List<dynamic>> response = await _dio.get<List<dynamic>>('/users');
+    return (response.data ?? <dynamic>[])
+        .map((dynamic item) => UserAccount.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> createUser(String username, String password) async {
+    await _dio.post<void>(
+      '/users',
+      data: <String, Object?>{
+        'username': username,
+        'password': password,
+      },
+    );
+  }
+
+  Future<void> changeUserPassword(String username, String password) async {
+    await _dio.put<void>(
+      '/users/$username/password',
+      data: <String, Object?>{'password': password},
+    );
+  }
+
+  Future<void> deleteUser(String username) async {
+    await _dio.delete<void>('/users/$username');
+  }
 
   Future<List<StreamView>> streams() async {
     final response = await _dio.get<List<dynamic>>('/streams');
@@ -129,7 +227,8 @@ class ApiClient {
 
   Stream<ApiEvent> events() {
     final controller = StreamController<ApiEvent>.broadcast();
-    final source = html.EventSource('/api/events');
+    final String token = Uri.encodeQueryComponent(AuthStore.accessToken ?? '');
+    final source = html.EventSource('/api/events?access_token=$token');
 
     void handleEvent(html.Event event) {
       final html.MessageEvent message = event as html.MessageEvent;
@@ -166,31 +265,44 @@ class ApiClient {
 }
 
 class AuthStore {
-  static const String _key = 'neotranscoder.auth.token';
-  static const String _openKey = 'neotranscoder.auth.open';
+  static const String _accessKey = 'neotranscoder.auth.access_token';
+  static const String _refreshKey = 'neotranscoder.auth.refresh_token';
+  static const String _mustChangeKey = 'neotranscoder.auth.must_change_password';
+  static const String _usernameKey = 'neotranscoder.auth.username';
 
-  static String? get token {
-    return html.window.localStorage[_key];
+  static String? get accessToken {
+    return html.window.localStorage[_accessKey];
+  }
+
+  static String? get refreshToken {
+    return html.window.localStorage[_refreshKey];
   }
 
   static bool get isAuthenticated {
-    final String? value = token;
-    return html.window.localStorage[_openKey] == 'true' || (value != null && value.isNotEmpty);
+    final String? value = accessToken;
+    return value != null && value.isNotEmpty;
   }
 
-  static void save(String token) {
-    html.window.localStorage.remove(_openKey);
-    html.window.localStorage[_key] = token;
+  static bool get mustChangePassword {
+    return html.window.localStorage[_mustChangeKey] == 'true';
   }
 
-  static void continueWithoutToken() {
-    html.window.localStorage.remove(_key);
-    html.window.localStorage[_openKey] = 'true';
+  static String get username {
+    return html.window.localStorage[_usernameKey] ?? '';
+  }
+
+  static void save(AuthSession session) {
+    html.window.localStorage[_accessKey] = session.accessToken;
+    html.window.localStorage[_refreshKey] = session.refreshToken;
+    html.window.localStorage[_mustChangeKey] = session.mustChangePassword ? 'true' : 'false';
+    html.window.localStorage[_usernameKey] = session.user.username;
   }
 
   static void clear() {
-    html.window.localStorage.remove(_key);
-    html.window.localStorage.remove(_openKey);
+    html.window.localStorage.remove(_accessKey);
+    html.window.localStorage.remove(_refreshKey);
+    html.window.localStorage.remove(_mustChangeKey);
+    html.window.localStorage.remove(_usernameKey);
   }
 }
 
@@ -207,7 +319,7 @@ class ApiException implements Exception {
 
 String apiErrorMessage(Object error) {
   if (error is DioException && error.error is ApiException) {
-    return (error.error! as ApiException).message;
+    return (error.error as ApiException).message;
   }
   if (error is ApiException) {
     return error.message;

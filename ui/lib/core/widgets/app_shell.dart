@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../app/app_routes.dart';
+import '../../app/session_cubit.dart';
 import '../../app/theme.dart';
-import '../api/api_client.dart';
 
 class AppShell extends StatelessWidget {
   const AppShell({
@@ -94,8 +96,8 @@ class _TopBar extends StatelessWidget {
               IconButton(
                 tooltip: 'Logout',
                 onPressed: () {
-                  AuthStore.clear();
-                  context.go('/login');
+                  context.read<SessionCubit>().logout();
+                  context.go(AppRoutes.login);
                 },
                 icon: const Icon(Icons.logout, size: 18),
               ),
@@ -148,41 +150,41 @@ class _SideNavContent extends StatelessWidget {
           _NavItem(
             icon: Icons.dashboard_outlined,
             label: 'Dashboard',
-            path: '/',
-            selected: location == '/',
+            path: AppRoutes.dashboard,
+            selected: location == AppRoutes.dashboard,
           ),
           _NavItem(
             icon: Icons.stream_outlined,
             label: 'Streams',
-            path: '/streams',
-            selected: location == '/streams',
+            path: AppRoutes.streams,
+            selected: location == AppRoutes.streams,
           ),
           _NavItem(
             icon: Icons.tune_outlined,
             label: 'Profiles',
-            path: '/profiles',
-            selected: location == '/profiles',
+            path: AppRoutes.profiles,
+            selected: location == AppRoutes.profiles,
           ),
           _NavItem(
             icon: Icons.article_outlined,
             label: 'Logs',
-            path: '/logs',
-            selected: location == '/logs',
+            path: AppRoutes.logs,
+            selected: location == AppRoutes.logs,
           ),
           _NavItem(
             icon: Icons.settings_outlined,
             label: 'Settings',
-            path: '/settings',
-            selected: location == '/settings',
+            path: AppRoutes.settings,
+            selected: location == AppRoutes.settings,
           ),
           _NavItem(
             icon: Icons.logout,
             label: 'Logout',
-            path: '/login',
+            path: AppRoutes.login,
             selected: false,
             onTap: () {
-              AuthStore.clear();
-              context.go('/login');
+              context.read<SessionCubit>().logout();
+              context.go(AppRoutes.login);
             },
           ),
           const Spacer(),

@@ -8,8 +8,10 @@ environment:
 
 dependencies:
   dio: ^5.7.0
+  equatable: ^2.0.5
   flutter:
     sdk: flutter
+  flutter_bloc: ^8.1.6
   flutter_web_plugins:
     sdk: flutter
   go_router: ^14.6.2

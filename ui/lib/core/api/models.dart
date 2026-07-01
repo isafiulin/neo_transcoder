@@ -21,16 +21,28 @@ class StreamConfig {
     required this.name,
     required this.inputUrl,
     required this.outputUrl,
+    required this.sourceType,
     required this.profileName,
     required this.enabled,
+    required this.audioMaps,
+    required this.disableAudio,
+    required this.logo,
+    required this.options,
+    required this.logRetentionSeconds,
   });
 
   final String id;
   final String name;
   final String inputUrl;
   final String outputUrl;
+  final String sourceType;
   final String profileName;
   final bool enabled;
+  final List<String> audioMaps;
+  final bool disableAudio;
+  final LogoOverlay logo;
+  final Map<String, String> options;
+  final int logRetentionSeconds;
 
   factory StreamConfig.fromJson(Map<String, dynamic> json) {
     return StreamConfig(
@@ -38,8 +50,39 @@ class StreamConfig {
       name: json['name'] as String? ?? '',
       inputUrl: json['input_url'] as String? ?? '',
       outputUrl: json['output_url'] as String? ?? '',
+      sourceType: json['source_type'] as String? ?? 'multicast',
       profileName: json['profile_name'] as String? ?? '',
       enabled: json['enabled'] as bool? ?? false,
+      audioMaps: (json['audio_maps'] as List<dynamic>? ?? <dynamic>[]).cast<String>(),
+      disableAudio: json['disable_audio'] as bool? ?? false,
+      logo: LogoOverlay.fromJson(json['logo'] as Map<String, dynamic>? ?? <String, dynamic>{}),
+      options: (json['options'] as Map<String, dynamic>? ?? <String, dynamic>{}).map(
+        (String key, dynamic value) => MapEntry<String, String>(key, value as String? ?? ''),
+      ),
+      logRetentionSeconds: json['log_retention_seconds'] as int? ?? 60,
+    );
+  }
+}
+
+class LogoOverlay {
+  const LogoOverlay({
+    required this.enabled,
+    required this.path,
+    required this.x,
+    required this.y,
+  });
+
+  final bool enabled;
+  final String path;
+  final int x;
+  final int y;
+
+  factory LogoOverlay.fromJson(Map<String, dynamic> json) {
+    return LogoOverlay(
+      enabled: json['enabled'] as bool? ?? false,
+      path: json['path'] as String? ?? '',
+      x: json['x'] as int? ?? 0,
+      y: json['y'] as int? ?? 0,
     );
   }
 }
@@ -141,6 +184,8 @@ class Profile {
     required this.audioCodec,
     required this.audioBitrate,
     required this.outputFormat,
+    required this.templateArgs,
+    required this.templateDefaults,
   });
 
   final String name;
@@ -153,11 +198,14 @@ class Profile {
   final String audioCodec;
   final String audioBitrate;
   final String outputFormat;
+  final List<String> templateArgs;
+  final Map<String, String> templateDefaults;
 
   factory Profile.fromJson(Map<String, dynamic> json) {
     final video = json['video'] as Map<String, dynamic>? ?? {};
     final audio = json['audio'] as Map<String, dynamic>? ?? {};
     final output = json['output'] as Map<String, dynamic>? ?? {};
+    final template = json['template'] as Map<String, dynamic>? ?? {};
     return Profile(
       name: json['name'] as String? ?? '',
       videoCodec: video['codec'] as String? ?? '',
@@ -169,6 +217,10 @@ class Profile {
       audioCodec: audio['codec'] as String? ?? '',
       audioBitrate: audio['bitrate'] as String? ?? '',
       outputFormat: output['format'] as String? ?? '',
+      templateArgs: (template['args'] as List<dynamic>? ?? <dynamic>[]).cast<String>(),
+      templateDefaults: (template['defaults'] as Map<String, dynamic>? ?? <String, dynamic>{}).map(
+        (String key, dynamic value) => MapEntry<String, String>(key, value as String? ?? ''),
+      ),
     );
   }
 }
@@ -212,6 +264,52 @@ class CommandPreview {
     return CommandPreview(
       path: json['path'] as String? ?? '',
       args: (json['args'] as List<dynamic>? ?? []).cast<String>(),
+    );
+  }
+}
+
+class UserAccount {
+  const UserAccount({
+    required this.username,
+    required this.mustChangePassword,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String username;
+  final bool mustChangePassword;
+  final String createdAt;
+  final String updatedAt;
+
+  factory UserAccount.fromJson(Map<String, dynamic> json) {
+    return UserAccount(
+      username: json['username'] as String? ?? '',
+      mustChangePassword: json['must_change_password'] as bool? ?? false,
+      createdAt: json['created_at'] as String? ?? '',
+      updatedAt: json['updated_at'] as String? ?? '',
+    );
+  }
+}
+
+class AuthSession {
+  const AuthSession({
+    required this.accessToken,
+    required this.refreshToken,
+    required this.mustChangePassword,
+    required this.user,
+  });
+
+  final String accessToken;
+  final String refreshToken;
+  final bool mustChangePassword;
+  final UserAccount user;
+
+  factory AuthSession.fromJson(Map<String, dynamic> json) {
+    return AuthSession(
+      accessToken: json['access_token'] as String? ?? '',
+      refreshToken: json['refresh_token'] as String? ?? '',
+      mustChangePassword: json['must_change_password'] as bool? ?? false,
+      user: UserAccount.fromJson(json['user'] as Map<String, dynamic>? ?? <String, dynamic>{}),
     );
   }
 }

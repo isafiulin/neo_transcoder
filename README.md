@@ -81,12 +81,23 @@ UI stack:
 Flutter Web
 Dio
 go_router
+flutter_bloc / Cubit
 Path URL strategy
 Material widgets
 ```
 
 The UI uses a light operator-dashboard style: white surfaces, restrained
 tables, compact controls, and NeoTelecom blue as the primary color.
+Feature screens keep UI rendering separate from state and business logic:
+`BlocBuilder` renders immutable Cubit state, Cubits call repositories, and
+repositories call the HTTP API through Dio.
+
+Routes are declared through `AppRoutes` instead of hardcoded strings. Flutter
+uses path URL strategy, and the Go daemon serves unknown web paths through the
+SPA fallback, so browser refresh keeps the current page when local
+authentication state is valid. App startup goes through a splash route while
+the UI verifies or refreshes the local session; after that the router sends the
+operator either to login or back to the originally requested URL.
 
 Main UI workflows:
 
@@ -105,7 +116,9 @@ Source layout:
 ui/lib/app
 ui/lib/core/api
 ui/lib/core/design_system
+ui/lib/core/state
 ui/lib/core/widgets
+ui/lib/data/repositories
 ui/lib/features/dashboard
 ui/lib/features/streams
 ui/lib/features/profiles
@@ -146,9 +159,6 @@ Example:
     "bind": "0.0.0.0",
     "port": 8080
   },
-  "auth": {
-    "token": "change-me"
-  },
   "ffmpeg": {
     "path": "/usr/bin/ffmpeg",
     "ffprobe_path": "/usr/bin/ffprobe"
@@ -175,15 +185,33 @@ Write a default config:
 neotranscoder config write-default --config /etc/neotranscoder/config.json
 ```
 
-If `auth.token` is empty, API authentication is disabled. For production,
-set a long random token and use it in the web login screen or curl requests:
+Authentication is managed by the backend, not by a static token in the config
+file. On the first start NeoTranscoder creates a default local admin account:
 
-```sh
-curl -H "Authorization: Bearer <token>" http://server:8080/api/streams
+```text
+username: admin
+password: 123456
 ```
 
-The web login screen stores the token in browser local storage. If auth is
-disabled in the daemon config, the UI can continue without a token.
+That password must be changed after the first login. Users are stored in the
+state file as password hashes together with the token signing secret. The state
+file is sensitive and is written with `0600` permissions. The backend issues
+short-lived bearer access tokens and refresh tokens after login. The web UI
+stores those tokens in browser local storage.
+
+API example:
+
+```sh
+curl -X POST http://server:8080/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"123456"}'
+```
+
+Use the returned access token for protected API calls:
+
+```sh
+curl -H "Authorization: Bearer <access_token>" http://server:8080/api/streams
+```
 
 ## System Service
 
@@ -390,10 +418,23 @@ Health and diagnostics:
 ```text
 GET    /api/health
 GET    /api/auth/required
+POST   /api/auth/login
+POST   /api/auth/refresh
+GET    /api/auth/verify
+POST   /api/auth/change-password
 GET    /api/doctor
 GET    /api/events
 GET    /api/metrics
 GET    /api/logs
+```
+
+User management:
+
+```text
+GET    /api/users
+POST   /api/users
+PUT    /api/users/{username}/password
+DELETE /api/users/{username}
 ```
 
 Probe input stream:
@@ -443,6 +484,65 @@ Create or update a profile:
 }
 ```
 
+Profiles can also be template-based. Template profiles store an FFmpeg argument
+array, not a shell command. The daemon replaces `${i}` with the input URL,
+`${o}` with the output URL, and any additional `${name}` value from profile
+defaults or stream `options`. Stream options override profile defaults.
+
+Example template profile:
+
+```json
+{
+  "name": "h264_ultrafast_template_4m",
+  "template": {
+    "args": [
+      "-y",
+      "-hide_banner",
+      "-nostdin",
+      "-i",
+      "${i}?overrun_nonfatal=1&fifo_size=100000000",
+      "-map",
+      "0:v:0",
+      "-map",
+      "0:a:0",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "${preset}",
+      "-profile:v",
+      "main",
+      "-pix_fmt",
+      "yuv420p",
+      "-vf",
+      "yadif",
+      "-b:v",
+      "${video_bitrate}",
+      "-maxrate",
+      "${video_bitrate}",
+      "-bufsize",
+      "${video_bufsize}",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "${audio_bitrate}",
+      "-ar",
+      "48000",
+      "-ac",
+      "2",
+      "-f",
+      "mpegts",
+      "${o}?pkt_size=1316"
+    ],
+    "defaults": {
+      "preset": "ultrafast",
+      "video_bitrate": "4M",
+      "video_bufsize": "8M",
+      "audio_bitrate": "128k"
+    }
+  }
+}
+```
+
 Streams:
 
 ```text
@@ -469,9 +569,23 @@ Create or update a stream:
 {
   "id": "channel_1",
   "name": "Channel 1",
+  "source_type": "multicast",
   "input_url": "udp://239.1.1.1:1234?localaddr=10.0.0.5",
   "output_url": "udp://239.2.2.2:1234?pkt_size=1316",
   "profile_name": "h264_veryfast_4m",
+  "audio_maps": ["0:a:0"],
+  "disable_audio": false,
+  "logo": {
+    "enabled": false,
+    "path": "/opt/neotranscoder/assets/logo.png",
+    "x": 20,
+    "y": 20
+  },
+  "options": {
+    "video_bitrate": "4M",
+    "audio_bitrate": "128k"
+  },
+  "log_retention_seconds": 60,
   "enabled": true,
   "restart": {
     "enabled": true,
@@ -481,6 +595,24 @@ Create or update a stream:
   }
 }
 ```
+
+`source_type` can be:
+
+```text
+multicast
+file
+```
+
+For file-to-multicast streams, set `source_type` to `file` and use a local file
+path in `input_url`. The daemon adds `-re` so FFmpeg reads the file at realtime
+speed and publishes it to the multicast `output_url`.
+
+Audio selection is controlled by `audio_maps`. Use FFmpeg map expressions such
+as `0:a:0` or `0:a:1`, one per selected track. Set `disable_audio` to `true` to
+remove audio from the output.
+
+Logo overlay is controlled by `logo`. When enabled, the daemon adds the logo as
+a second FFmpeg input and overlays it on the selected video stream at `x:y`.
 
 Profiles and stream definitions are persisted in the local JSON state file
 configured by `storage.path`. Runtime process state such as PID and current
@@ -530,6 +662,11 @@ GET /api/streams/channel_1/logs?limit=200
 
 FFmpeg stderr lines are captured as stream log entries and also emitted through
 `/api/events` as `stream_log` events.
+
+Each stream can set `log_retention_seconds`. The default is `60`, which keeps
+the web encoding journal short and prevents noisy FFmpeg output from filling the
+in-memory recent log buffer. Server logs still go to journald and the configured
+daemon log target.
 
 Common errors are classified into stable codes for UI filtering and highlighting:
 
@@ -659,11 +796,11 @@ dist/neotranscoder/
 ## Security Notes
 
 NeoTranscoder starts external FFmpeg processes. Treat stream URLs and profile
-settings as trusted operator input unless authentication and authorization are
-enabled in the deployment.
+settings as trusted operator input. The built-in user system protects the
+management API with backend-issued bearer access tokens and refresh tokens.
 
 FFmpeg commands are built as an argument array, not as a shell string. This
 avoids shell interpolation and quoting bugs.
 
-Do not expose the management HTTP port to untrusted networks without an
-authentication layer or a trusted reverse proxy.
+Do not expose the management HTTP port to untrusted networks without TLS and
+network-level access controls or a trusted reverse proxy.

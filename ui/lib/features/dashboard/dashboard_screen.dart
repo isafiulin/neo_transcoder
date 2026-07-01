@@ -1,120 +1,89 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../../core/api/api_client.dart';
 import '../../core/api/models.dart';
 import '../../core/design_system/status.dart';
+import '../../core/state/load_status.dart';
 import '../../core/widgets/metric_tile.dart';
 import '../../core/widgets/neo_badge.dart';
 import '../../core/widgets/neo_panel.dart';
 import '../../core/widgets/neo_search_field.dart';
 import '../../core/widgets/neo_state.dart';
+import 'dashboard_cubit.dart';
 
-class DashboardScreen extends StatefulWidget {
+class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
 
   @override
-  State<DashboardScreen> createState() => _DashboardScreenState();
+  Widget build(BuildContext context) {
+    return BlocBuilder<DashboardCubit, DashboardState>(
+      builder: (BuildContext context, DashboardState state) {
+        final List<StreamView> filtered = state.filtered;
+        final int running = state.streams.where((StreamView item) => item.state.isRunning).length;
+        final int errors = state.streams.where((StreamView item) => item.state.hasError).length;
+        final double cpu = state.streams.fold<double>(
+          0,
+          (double sum, StreamView item) => sum + (item.state.process?.cpuPercent ?? 0),
+        );
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            _Header(
+              onSearch: context.read<DashboardCubit>().setQuery,
+            ),
+            const SizedBox(height: 18),
+            LayoutBuilder(
+              builder: (BuildContext context, BoxConstraints constraints) {
+                final int columns = constraints.maxWidth > 1100 ? 4 : 2;
+                return GridView.count(
+                  crossAxisCount: columns,
+                  crossAxisSpacing: 12,
+                  mainAxisSpacing: 12,
+                  childAspectRatio: 4.2,
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  children: <Widget>[
+                    MetricTile(label: 'Streams', value: '${state.streams.length}', icon: Icons.stream_outlined),
+                    MetricTile(label: 'Running', value: '$running', icon: Icons.play_circle_outline),
+                    MetricTile(label: 'Errors', value: '$errors', icon: Icons.error_outline),
+                    MetricTile(label: 'FFmpeg CPU', value: '${cpu.toStringAsFixed(1)}%', icon: Icons.memory_outlined),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 18),
+            NeoPanel(
+              title: 'Live streams',
+              child: _DashboardContent(state: state, streams: filtered),
+            ),
+          ],
+        );
+      },
+    );
+  }
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
-  final ApiClient _api = ApiClient();
-  List<StreamView> _streams = <StreamView>[];
-  String _query = '';
-  bool _loading = true;
-  String? _error;
-  StreamSubscription<ApiEvent>? _events;
+class _DashboardContent extends StatelessWidget {
+  const _DashboardContent({
+    required this.state,
+    required this.streams,
+    super.key,
+  });
 
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_load());
-    _events = _api.events().listen((ApiEvent event) {
-      if (event.type.startsWith('stream_')) {
-        unawaited(_load());
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    unawaited(_events?.cancel());
-    super.dispose();
-  }
-
-  Future<void> _load() async {
-    try {
-      final List<StreamView> streams = await _api.metrics();
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _streams = streams;
-        _loading = false;
-        _error = null;
-      });
-    } on Object catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _loading = false;
-        _error = apiErrorMessage(error);
-      });
-    }
-  }
+  final DashboardState state;
+  final List<StreamView> streams;
 
   @override
   Widget build(BuildContext context) {
-    final List<StreamView> filtered = _streams.where(_matchesQuery).toList();
-    final int running = _streams.where((StreamView item) => item.state.isRunning).length;
-    final int errors = _streams.where((StreamView item) => item.state.hasError).length;
-    final double cpu = _streams.fold<double>(
-      0,
-      (double sum, StreamView item) => sum + (item.state.process?.cpuPercent ?? 0),
-    );
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        _Header(onSearch: (String value) => setState(() => _query = value)),
-        const SizedBox(height: 18),
-        LayoutBuilder(
-          builder: (BuildContext context, BoxConstraints constraints) {
-            final int columns = constraints.maxWidth > 1100 ? 4 : 2;
-            return GridView.count(
-              crossAxisCount: columns,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
-              childAspectRatio: 4.2,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              children: <Widget>[
-                MetricTile(label: 'Streams', value: '${_streams.length}', icon: Icons.stream_outlined),
-                MetricTile(label: 'Running', value: '$running', icon: Icons.play_circle_outline),
-                MetricTile(label: 'Errors', value: '$errors', icon: Icons.error_outline),
-                MetricTile(label: 'FFmpeg CPU', value: '${cpu.toStringAsFixed(1)}%', icon: Icons.memory_outlined),
-              ],
-            );
-          },
-        ),
-        const SizedBox(height: 18),
-        NeoPanel(
-          title: 'Live streams',
-          child: _content(filtered),
-        ),
-      ],
-    );
-  }
-
-  Widget _content(List<StreamView> streams) {
-    final String? error = _error;
-    if (_loading) {
+    if (state.status == LoadStatus.loading || state.status == LoadStatus.initial) {
       return const NeoLoadingState(label: 'Loading streams');
     }
-    if (error != null) {
-      return NeoErrorState(message: error, onRetry: _load);
+    if (state.status == LoadStatus.failure) {
+      return NeoErrorState(
+        message: state.error,
+        onRetry: context.read<DashboardCubit>().load,
+      );
     }
     if (streams.isEmpty) {
       return const NeoEmptyState(
@@ -123,17 +92,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
     }
     return _StreamGrid(streams: streams);
-  }
-
-  bool _matchesQuery(StreamView item) {
-    final String value = _query.trim().toLowerCase();
-    if (value.isEmpty) {
-      return true;
-    }
-    return item.config.name.toLowerCase().contains(value) ||
-        item.config.id.toLowerCase().contains(value) ||
-        item.config.inputUrl.toLowerCase().contains(value) ||
-        item.config.outputUrl.toLowerCase().contains(value);
   }
 }
 

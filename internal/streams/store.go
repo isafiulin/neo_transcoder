@@ -7,23 +7,38 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"sync"
 	"time"
 
+	"neotranscoder/internal/auth"
 	"neotranscoder/internal/ffmpeg"
 )
 
 type Config struct {
-	ID          string         `json:"id"`
-	Name        string         `json:"name"`
-	InputURL    string         `json:"input_url"`
-	OutputURL   string         `json:"output_url"`
-	ProfileName string         `json:"profile_name"`
-	VideoMap    string         `json:"video_map,omitempty"`
-	AudioMap    string         `json:"audio_map,omitempty"`
-	Enabled     bool           `json:"enabled"`
-	Restart     *RestartPolicy `json:"restart,omitempty"`
+	ID                  string            `json:"id"`
+	Name                string            `json:"name"`
+	InputURL            string            `json:"input_url"`
+	OutputURL           string            `json:"output_url"`
+	SourceType          string            `json:"source_type,omitempty"`
+	ProfileName         string            `json:"profile_name"`
+	VideoMap            string            `json:"video_map,omitempty"`
+	AudioMap            string            `json:"audio_map,omitempty"`
+	AudioMaps           []string          `json:"audio_maps,omitempty"`
+	DisableAudio        bool              `json:"disable_audio,omitempty"`
+	Logo                LogoOverlay       `json:"logo,omitempty"`
+	Options             map[string]string `json:"options,omitempty"`
+	LogRetentionSeconds int               `json:"log_retention_seconds,omitempty"`
+	Enabled             bool              `json:"enabled"`
+	Restart             *RestartPolicy    `json:"restart,omitempty"`
+}
+
+type LogoOverlay struct {
+	Enabled bool   `json:"enabled"`
+	Path    string `json:"path,omitempty"`
+	X       int    `json:"x,omitempty"`
+	Y       int    `json:"y,omitempty"`
 }
 
 type RestartPolicy struct {
@@ -89,6 +104,8 @@ type Store struct {
 	path        string
 	streams     map[string]Config
 	profiles    map[string]ffmpeg.Profile
+	users       map[string]auth.User
+	authSecret  string
 	states      map[string]State
 	logs        []LogEntry
 	subscribers map[chan Event]struct{}
@@ -99,6 +116,7 @@ func NewStore(path string) (*Store, error) {
 		path:        path,
 		streams:     make(map[string]Config),
 		profiles:    make(map[string]ffmpeg.Profile),
+		users:       make(map[string]auth.User),
 		states:      make(map[string]State),
 		logs:        make([]LogEntry, 0, 512),
 		subscribers: make(map[chan Event]struct{}),
@@ -107,6 +125,9 @@ func NewStore(path string) (*Store, error) {
 		return nil, err
 	}
 	store.ensureDefaultProfiles()
+	if err := store.ensureAuth(); err != nil {
+		return nil, err
+	}
 	return store, nil
 }
 
@@ -206,7 +227,7 @@ func (s *Store) UpsertProfile(profile ffmpeg.Profile) (ffmpeg.Profile, error) {
 }
 
 func (s *Store) DeleteProfile(name string) (bool, error) {
-	if name == "h264_veryfast_4m" {
+	if name == "h264_veryfast_4m" || name == "h264_ultrafast_template_4m" {
 		return false, fmt.Errorf("default profile cannot be deleted")
 	}
 
@@ -243,6 +264,123 @@ func (s *Store) Delete(id string) (bool, error) {
 	return true, nil
 }
 
+func (s *Store) AuthSecret() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.authSecret
+}
+
+func (s *Store) ListUsers() []auth.PublicUser {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	names := make([]string, 0, len(s.users))
+	for name := range s.users {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make([]auth.PublicUser, 0, len(names))
+	for _, name := range names {
+		out = append(out, auth.Public(s.users[name]))
+	}
+	return out
+}
+
+func (s *Store) GetUser(username string) (auth.User, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	user, ok := s.users[username]
+	return user, ok
+}
+
+func (s *Store) Authenticate(username, password string) (auth.User, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	user, ok := s.users[username]
+	if !ok || !auth.VerifyPassword(user.PasswordHash, password) {
+		return auth.User{}, false
+	}
+	return user, true
+}
+
+func (s *Store) VerifyTokenClaims(claims auth.Claims) (auth.User, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	user, ok := s.users[claims.Subject]
+	if !ok || user.TokenVersion != claims.TokenVersion {
+		return auth.User{}, false
+	}
+	return user, true
+}
+
+func (s *Store) CreateUser(username, password string) (auth.PublicUser, error) {
+	now := time.Now()
+	user, err := auth.NewUser(username, password, false, now)
+	if err != nil {
+		return auth.PublicUser{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.users[user.Username]; ok {
+		return auth.PublicUser{}, fmt.Errorf("user already exists")
+	}
+	s.users[user.Username] = user
+	if err := s.saveLocked(); err != nil {
+		return auth.PublicUser{}, err
+	}
+	s.emitLocked(Event{Type: "user_created", Time: now, Payload: auth.Public(user)})
+	return auth.Public(user), nil
+}
+
+func (s *Store) DeleteUser(username string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.users[username]; !ok {
+		return false, nil
+	}
+	if username == "admin" {
+		return false, fmt.Errorf("default admin user cannot be deleted")
+	}
+	delete(s.users, username)
+	if err := s.saveLocked(); err != nil {
+		return false, err
+	}
+	s.emitLocked(Event{Type: "user_deleted", Time: time.Now(), Payload: map[string]string{"username": username}})
+	return true, nil
+}
+
+func (s *Store) ChangePassword(username, currentPassword, newPassword string, requireCurrent bool) (auth.PublicUser, error) {
+	if err := auth.ValidatePassword(newPassword); err != nil {
+		return auth.PublicUser{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user, ok := s.users[username]
+	if !ok {
+		return auth.PublicUser{}, fmt.Errorf("user not found")
+	}
+	if requireCurrent && !auth.VerifyPassword(user.PasswordHash, currentPassword) {
+		return auth.PublicUser{}, fmt.Errorf("current password is invalid")
+	}
+	hashValue, err := auth.HashPassword(newPassword)
+	if err != nil {
+		return auth.PublicUser{}, err
+	}
+	user.PasswordHash = hashValue
+	user.MustChangePassword = false
+	user.TokenVersion++
+	user.UpdatedAt = time.Now()
+	s.users[username] = user
+	if err := s.saveLocked(); err != nil {
+		return auth.PublicUser{}, err
+	}
+	s.emitLocked(Event{Type: "user_password_changed", Time: user.UpdatedAt, Payload: auth.Public(user)})
+	return auth.Public(user), nil
+}
+
 func (s *Store) SetState(id string, state State) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -275,6 +413,7 @@ func (s *Store) AppendLogCode(streamID, level, code, message string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.logs = append(s.logs, entry)
+	s.pruneLogsLocked(entry.Time)
 	if len(s.logs) > 1000 {
 		s.logs = s.logs[len(s.logs)-1000:]
 	}
@@ -335,9 +474,32 @@ func (s *Store) emitLocked(event Event) {
 	}
 }
 
+func (s *Store) pruneLogsLocked(now time.Time) {
+	if len(s.logs) == 0 {
+		return
+	}
+	out := s.logs[:0]
+	for _, entry := range s.logs {
+		retention := DefaultLogRetentionSeconds()
+		if cfg, ok := s.streams[entry.StreamID]; ok && cfg.LogRetentionSeconds > 0 {
+			retention = cfg.LogRetentionSeconds
+		}
+		if entry.StreamID == "" || now.Sub(entry.Time) <= time.Duration(retention)*time.Second {
+			out = append(out, entry)
+		}
+	}
+	s.logs = out
+}
+
 type persistedState struct {
 	Streams  []Config         `json:"streams"`
 	Profiles []ffmpeg.Profile `json:"profiles"`
+	Users    []auth.User      `json:"users"`
+	Auth     persistedAuth    `json:"auth"`
+}
+
+type persistedAuth struct {
+	Secret string `json:"secret"`
 }
 
 func (s *Store) load() error {
@@ -362,6 +524,19 @@ func (s *Store) load() error {
 		}
 		s.profiles[normalized.Name] = normalized
 	}
+	for _, user := range state.Users {
+		if err := auth.ValidateUsername(user.Username); err != nil {
+			return fmt.Errorf("user %q: %w", user.Username, err)
+		}
+		if user.PasswordHash == "" {
+			return fmt.Errorf("user %q: password_hash is required", user.Username)
+		}
+		if user.TokenVersion < 1 {
+			user.TokenVersion = 1
+		}
+		s.users[user.Username] = user
+	}
+	s.authSecret = state.Auth.Secret
 	s.ensureDefaultProfiles()
 	for _, cfg := range state.Streams {
 		normalized, err := normalizeConfig(cfg)
@@ -393,6 +568,10 @@ func (s *Store) saveLocked() error {
 	state := persistedState{
 		Streams:  make([]Config, 0, len(ids)),
 		Profiles: s.sortedProfilesLocked(),
+		Users:    s.sortedUsersLocked(),
+		Auth: persistedAuth{
+			Secret: s.authSecret,
+		},
 	}
 	for _, id := range ids {
 		state.Streams = append(state.Streams, s.streams[id])
@@ -417,7 +596,7 @@ func (s *Store) saveLocked() error {
 		_ = os.Remove(tmpName)
 		return err
 	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
+	if err := os.Chmod(tmpName, 0o600); err != nil {
 		_ = os.Remove(tmpName)
 		return err
 	}
@@ -437,8 +616,23 @@ func normalizeConfig(cfg Config) (Config, error) {
 	if cfg.OutputURL == "" {
 		return Config{}, fmt.Errorf("output_url is required")
 	}
+	if cfg.SourceType == "" {
+		cfg.SourceType = "multicast"
+	}
+	if cfg.SourceType != "multicast" && cfg.SourceType != "file" {
+		return Config{}, fmt.Errorf("source_type must be multicast or file")
+	}
 	if cfg.ProfileName == "" {
 		cfg.ProfileName = "h264_veryfast_4m"
+	}
+	if cfg.LogRetentionSeconds == 0 {
+		cfg.LogRetentionSeconds = DefaultLogRetentionSeconds()
+	}
+	if cfg.LogRetentionSeconds < 0 {
+		return Config{}, fmt.Errorf("log_retention_seconds must be greater than or equal to 0")
+	}
+	if err := validateOptions(cfg.Options); err != nil {
+		return Config{}, err
 	}
 	restart, err := normalizeRestartPolicy(cfg.Restart)
 	if err != nil {
@@ -446,6 +640,24 @@ func normalizeConfig(cfg Config) (Config, error) {
 	}
 	cfg.Restart = &restart
 	return cfg, nil
+}
+
+func DefaultLogRetentionSeconds() int {
+	return 60
+}
+
+var optionNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func validateOptions(options map[string]string) error {
+	for name := range options {
+		if name == "i" || name == "o" {
+			return fmt.Errorf("options.%s is reserved", name)
+		}
+		if !optionNamePattern.MatchString(name) {
+			return fmt.Errorf("options.%s has invalid name", name)
+		}
+	}
+	return nil
 }
 
 func DefaultRestartPolicy() RestartPolicy {
@@ -491,6 +703,9 @@ func normalizeProfile(profile ffmpeg.Profile) (ffmpeg.Profile, error) {
 	if profile.Name == "" {
 		return ffmpeg.Profile{}, fmt.Errorf("name is required")
 	}
+	if len(profile.Template.Args) > 0 {
+		return profile, nil
+	}
 	if profile.Video.Codec == "" {
 		return ffmpeg.Profile{}, fmt.Errorf("video.codec is required")
 	}
@@ -508,6 +723,36 @@ func (s *Store) ensureDefaultProfiles() {
 		defaultProfile := ffmpeg.H264VeryFast4M()
 		s.profiles[defaultProfile.Name] = defaultProfile
 	}
+	if _, ok := s.profiles["h264_ultrafast_template_4m"]; !ok {
+		defaultProfile := ffmpeg.H264UltrafastTemplate4M()
+		s.profiles[defaultProfile.Name] = defaultProfile
+	}
+}
+
+func (s *Store) ensureAuth() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := false
+	if s.authSecret == "" {
+		secret, err := auth.GenerateSecret()
+		if err != nil {
+			return err
+		}
+		s.authSecret = secret
+		changed = true
+	}
+	if _, ok := s.users["admin"]; !ok {
+		user, err := auth.NewUser("admin", "123456", true, time.Now())
+		if err != nil {
+			return err
+		}
+		s.users[user.Username] = user
+		changed = true
+	}
+	if changed {
+		return s.saveLocked()
+	}
+	return nil
 }
 
 func (s *Store) sortedProfilesLocked() []ffmpeg.Profile {
@@ -519,6 +764,19 @@ func (s *Store) sortedProfilesLocked() []ffmpeg.Profile {
 	out := make([]ffmpeg.Profile, 0, len(names))
 	for _, name := range names {
 		out = append(out, s.profiles[name])
+	}
+	return out
+}
+
+func (s *Store) sortedUsersLocked() []auth.User {
+	names := make([]string, 0, len(s.users))
+	for name := range s.users {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]auth.User, 0, len(names))
+	for _, name := range names {
+		out = append(out, s.users[name])
 	}
 	return out
 }

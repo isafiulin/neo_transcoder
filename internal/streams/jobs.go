@@ -63,10 +63,20 @@ func (m *JobManager) start(id string, restarted bool) error {
 	}
 
 	args, err := ffmpeg.BuildArgs(ffmpeg.Stream{
-		InputURL:  view.Config.InputURL,
-		OutputURL: view.Config.OutputURL,
-		VideoMap:  view.Config.VideoMap,
-		AudioMap:  view.Config.AudioMap,
+		InputURL:     view.Config.InputURL,
+		OutputURL:    view.Config.OutputURL,
+		SourceType:   view.Config.SourceType,
+		VideoMap:     view.Config.VideoMap,
+		AudioMap:     view.Config.AudioMap,
+		AudioMaps:    view.Config.AudioMaps,
+		DisableAudio: view.Config.DisableAudio,
+		Logo: ffmpeg.LogoOverlay{
+			Enabled: view.Config.Logo.Enabled,
+			Path:    view.Config.Logo.Path,
+			X:       view.Config.Logo.X,
+			Y:       view.Config.Logo.Y,
+		},
+		Options: view.Config.Options,
 	}, profile)
 	if err != nil {
 		return err

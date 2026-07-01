@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../../core/api/api_client.dart';
 import '../../core/api/models.dart';
 import '../../core/design_system/status.dart';
+import '../../core/state/load_status.dart';
 import '../../core/widgets/neo_badge.dart';
 import '../../core/widgets/neo_button.dart';
 import '../../core/widgets/neo_panel.dart';
 import '../../core/widgets/neo_search_field.dart';
 import '../../core/widgets/neo_state.dart';
+import 'logs_cubit.dart';
 
 class LogsScreen extends StatefulWidget {
   const LogsScreen({super.key});
@@ -17,81 +19,55 @@ class LogsScreen extends StatefulWidget {
 }
 
 class _LogsScreenState extends State<LogsScreen> {
-  final ApiClient _api = ApiClient();
-  List<LogEntry> _logs = <LogEntry>[];
-  String _query = '';
-  bool _loading = true;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    try {
-      final List<LogEntry> logs = await _api.logs();
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _logs = logs;
-        _loading = false;
-        _error = null;
-      });
-    } on Object catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _loading = false;
-        _error = apiErrorMessage(error);
-      });
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final List<LogEntry> logs = _logs.where(_matchesQuery).toList();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          alignment: WrapAlignment.spaceBetween,
-          crossAxisAlignment: WrapCrossAlignment.center,
+    return BlocBuilder<LogsCubit, LogsState>(
+      builder: (BuildContext context, LogsState state) {
+        final List<LogEntry> logs = state.filtered;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
-            Text('Logs', style: Theme.of(context).textTheme.titleLarge),
             Wrap(
               spacing: 12,
               runSpacing: 12,
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: <Widget>[
-                NeoSearchField(
-                  onChanged: (String value) => setState(() => _query = value),
-                  hintText: 'Filter logs',
+                Text('Logs', style: Theme.of(context).textTheme.titleLarge),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: <Widget>[
+                    NeoSearchField(
+                      onChanged: context.read<LogsCubit>().setQuery,
+                      hintText: 'Filter logs',
+                    ),
+                    NeoButton(
+                      label: 'Refresh',
+                      icon: Icons.refresh,
+                      onPressed: context.read<LogsCubit>().load,
+                    ),
+                  ],
                 ),
-                NeoButton(label: 'Refresh', icon: Icons.refresh, onPressed: _load),
               ],
             ),
+            const SizedBox(height: 18),
+            NeoPanel(
+              child: _content(state, logs),
+            ),
           ],
-        ),
-        const SizedBox(height: 18),
-        NeoPanel(
-          child: _content(logs),
-        ),
-      ],
+        );
+      },
     );
   }
 
-  Widget _content(List<LogEntry> logs) {
-    final String? error = _error;
-    if (_loading) {
+  Widget _content(LogsState state, List<LogEntry> logs) {
+    final String? error = state.error.isEmpty ? null : state.error;
+    if (state.status == LoadStatus.loading || state.status == LoadStatus.initial) {
       return const NeoLoadingState(label: 'Loading logs');
     }
     if (error != null) {
-      return NeoErrorState(message: error, onRetry: _load);
+      return NeoErrorState(message: error, onRetry: context.read<LogsCubit>().load);
     }
     if (logs.isEmpty) {
       return const NeoEmptyState(
@@ -102,16 +78,6 @@ class _LogsScreenState extends State<LogsScreen> {
     return Column(
       children: logs.map((LogEntry item) => _LogRow(item: item)).toList(),
     );
-  }
-
-  bool _matchesQuery(LogEntry log) {
-    final String value = _query.trim().toLowerCase();
-    if (value.isEmpty) {
-      return true;
-    }
-    return log.streamId.toLowerCase().contains(value) ||
-        log.message.toLowerCase().contains(value) ||
-        log.code.toLowerCase().contains(value);
   }
 }
 

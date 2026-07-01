@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../core/api/api_client.dart';
 import '../../core/api/models.dart';
 import '../../core/design_system/status.dart';
+import '../../core/state/load_status.dart';
 import '../../core/widgets/neo_badge.dart';
 import '../../core/widgets/neo_button.dart';
 import '../../core/widgets/neo_panel.dart';
 import '../../core/widgets/neo_search_field.dart';
 import '../../core/widgets/neo_state.dart';
+import 'streams_cubit.dart';
 
 class StreamsScreen extends StatefulWidget {
   const StreamsScreen({super.key});
@@ -17,47 +20,9 @@ class StreamsScreen extends StatefulWidget {
 }
 
 class _StreamsScreenState extends State<StreamsScreen> {
-  final ApiClient _api = ApiClient();
-  List<StreamView> _streams = <StreamView>[];
-  List<Profile> _profiles = <Profile>[];
-  String _query = '';
-  bool _loading = true;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    try {
-      final List<StreamView> streams = await _api.streams();
-      final List<Profile> profiles = await _api.profiles();
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _streams = streams;
-        _profiles = profiles;
-        _loading = false;
-        _error = null;
-      });
-    } on Object catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _loading = false;
-        _error = apiErrorMessage(error);
-      });
-    }
-  }
-
   Future<void> _action(Future<void> Function() call) async {
     try {
       await call();
-      await _load();
     } on Object catch (error) {
       _showError(error);
     }
@@ -65,52 +30,55 @@ class _StreamsScreenState extends State<StreamsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final List<StreamView> streams = _streams.where(_matchesQuery).toList();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          alignment: WrapAlignment.spaceBetween,
-          crossAxisAlignment: WrapCrossAlignment.center,
+    return BlocBuilder<StreamsCubit, StreamsState>(
+      builder: (BuildContext context, StreamsState state) {
+        final List<StreamView> streams = state.filtered;
+        return Column(
           children: <Widget>[
-            Text('Streams', style: Theme.of(context).textTheme.titleLarge),
             Wrap(
               spacing: 12,
               runSpacing: 12,
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: <Widget>[
-                NeoSearchField(onChanged: (String value) => setState(() => _query = value)),
-                NeoButton(
-                  label: 'Probe',
-                  icon: Icons.radar_outlined,
-                  onPressed: _openProbeDialog,
-                ),
-                NeoButton(
-                  label: 'New stream',
-                  icon: Icons.add,
-                  primary: true,
-                  onPressed: () => _openStreamDialog(),
+                Text('Streams', style: Theme.of(context).textTheme.titleLarge),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: <Widget>[
+                    NeoSearchField(onChanged: context.read<StreamsCubit>().setQuery),
+                    NeoButton(
+                      label: 'Probe',
+                      icon: Icons.radar_outlined,
+                      onPressed: _openProbeDialog,
+                    ),
+                    NeoButton(
+                      label: 'New stream',
+                      icon: Icons.add,
+                      primary: true,
+                      onPressed: () => _openStreamDialog(),
+                    ),
+                  ],
                 ),
               ],
             ),
+            const SizedBox(height: 18),
+            NeoPanel(
+              child: _content(state, streams),
+            ),
           ],
-        ),
-        const SizedBox(height: 18),
-        NeoPanel(
-          child: _content(streams),
-        ),
-      ],
+        );
+      },
     );
   }
 
-  Widget _content(List<StreamView> streams) {
-    final String? error = _error;
-    if (_loading) {
+  Widget _content(StreamsState state, List<StreamView> streams) {
+    final String? error = state.error.isEmpty ? null : state.error;
+    if (state.status == LoadStatus.loading || state.status == LoadStatus.initial) {
       return const NeoLoadingState(label: 'Loading streams');
     }
     if (error != null) {
-      return NeoErrorState(message: error, onRetry: _load);
+      return NeoErrorState(message: error, onRetry: context.read<StreamsCubit>().load);
     }
     if (streams.isEmpty) {
       return const NeoEmptyState(
@@ -150,13 +118,13 @@ class _StreamsScreenState extends State<StreamsScreen> {
               NeoButton(
                 label: 'Start',
                 icon: Icons.play_arrow,
-                onPressed: state.isRunning ? null : () => _action(() => _api.startStream(item.config.id)),
+                onPressed: state.isRunning ? null : () => _action(() => context.read<StreamsCubit>().start(item.config.id)),
               ),
               const SizedBox(width: 8),
               NeoButton(
                 label: 'Stop',
                 icon: Icons.stop,
-                onPressed: state.isRunning ? () => _action(() => _api.stopStream(item.config.id)) : null,
+                onPressed: state.isRunning ? () => _action(() => context.read<StreamsCubit>().stop(item.config.id)) : null,
               ),
               const SizedBox(width: 8),
               PopupMenuButton<String>(
@@ -179,7 +147,7 @@ class _StreamsScreenState extends State<StreamsScreen> {
   Future<void> _handleRowAction(String action, StreamView item) async {
     switch (action) {
       case 'restart':
-        await _action(() => _api.restartStream(item.config.id));
+        await _action(() => context.read<StreamsCubit>().restart(item.config.id));
         return;
       case 'edit':
         await _openStreamDialog(item: item);
@@ -194,32 +162,35 @@ class _StreamsScreenState extends State<StreamsScreen> {
   }
 
   Future<void> _openStreamDialog({StreamView? item}) async {
+    final StreamsCubit cubit = context.read<StreamsCubit>();
     final Map<String, Object?>? body = await showDialog<Map<String, Object?>>(
       context: context,
       builder: (BuildContext context) => _StreamDialog(
-        profiles: _profiles,
+        profiles: cubit.state.profiles,
         item: item,
       ),
     );
     if (body == null) {
       return;
     }
+    if (!mounted) {
+      return;
+    }
     try {
       if (item == null) {
-        await _api.saveStream(body);
+        await cubit.saveStream(body);
       } else {
-        await _api.updateStream(item.config.id, body);
+        await cubit.saveStream(body, id: item.config.id);
       }
-      await _load();
     } on Object catch (error) {
       _showError(error);
     }
   }
 
   Future<void> _openCommandDialog(String id) async {
-    late final CommandPreview preview;
+    final CommandPreview preview;
     try {
-      preview = await _api.command(id);
+      preview = await context.read<StreamsCubit>().command(id);
     } on Object catch (error) {
       _showError(error);
       return;
@@ -246,6 +217,7 @@ class _StreamsScreenState extends State<StreamsScreen> {
   }
 
   Future<void> _confirmDelete(StreamView item) async {
+    final StreamsCubit cubit = context.read<StreamsCubit>();
     final String label = item.config.name.isEmpty ? item.config.id : item.config.name;
     final bool? confirmed = await showDialog<bool>(
       context: context,
@@ -264,10 +236,12 @@ class _StreamsScreenState extends State<StreamsScreen> {
         ],
       ),
     );
+    if (!mounted) {
+      return;
+    }
     if (confirmed ?? false) {
       try {
-        await _api.deleteStream(item.config.id);
-        await _load();
+        await cubit.deleteStream(item.config.id);
       } on Object catch (error) {
         _showError(error);
       }
@@ -275,20 +249,11 @@ class _StreamsScreenState extends State<StreamsScreen> {
   }
 
   Future<void> _openProbeDialog() async {
+    final StreamsCubit cubit = context.read<StreamsCubit>();
     await showDialog<void>(
       context: context,
-      builder: (BuildContext context) => _ProbeDialog(api: _api),
+      builder: (BuildContext context) => _ProbeDialog(cubit: cubit),
     );
-  }
-
-  bool _matchesQuery(StreamView item) {
-    final String value = _query.trim().toLowerCase();
-    if (value.isEmpty) {
-      return true;
-    }
-    return item.config.name.toLowerCase().contains(value) ||
-        item.config.id.toLowerCase().contains(value) ||
-        item.config.profileName.toLowerCase().contains(value);
   }
 
   void _showError(Object error) {
@@ -321,7 +286,16 @@ class _StreamDialogState extends State<_StreamDialog> {
   final TextEditingController _name = TextEditingController();
   final TextEditingController _input = TextEditingController();
   final TextEditingController _output = TextEditingController();
+  final TextEditingController _audioMaps = TextEditingController();
+  final TextEditingController _logoPath = TextEditingController();
+  final TextEditingController _logoX = TextEditingController(text: '0');
+  final TextEditingController _logoY = TextEditingController(text: '0');
+  final TextEditingController _options = TextEditingController();
+  final TextEditingController _logRetention = TextEditingController(text: '60');
   bool _enabled = true;
+  bool _disableAudio = false;
+  bool _logoEnabled = false;
+  String _sourceType = 'multicast';
   String? _profile;
 
   @override
@@ -332,6 +306,15 @@ class _StreamDialogState extends State<_StreamDialog> {
     _name.text = item?.config.name ?? '';
     _input.text = item?.config.inputUrl ?? '';
     _output.text = item?.config.outputUrl ?? '';
+    _sourceType = item?.config.sourceType ?? 'multicast';
+    _audioMaps.text = item?.config.audioMaps.join('\n') ?? '';
+    _disableAudio = item?.config.disableAudio ?? false;
+    _logoEnabled = item?.config.logo.enabled ?? false;
+    _logoPath.text = item?.config.logo.path ?? '';
+    _logoX.text = '${item?.config.logo.x ?? 0}';
+    _logoY.text = '${item?.config.logo.y ?? 0}';
+    _options.text = _encodeKeyValues(item?.config.options ?? <String, String>{});
+    _logRetention.text = '${item?.config.logRetentionSeconds ?? 60}';
     _enabled = item?.config.enabled ?? true;
     _profile = item?.config.profileName ?? (widget.profiles.isEmpty ? null : widget.profiles.first.name);
   }
@@ -342,6 +325,12 @@ class _StreamDialogState extends State<_StreamDialog> {
     _name.dispose();
     _input.dispose();
     _output.dispose();
+    _audioMaps.dispose();
+    _logoPath.dispose();
+    _logoX.dispose();
+    _logoY.dispose();
+    _options.dispose();
+    _logRetention.dispose();
     super.dispose();
   }
 
@@ -351,35 +340,96 @@ class _StreamDialogState extends State<_StreamDialog> {
       title: Text(widget.item == null ? 'New stream' : 'Edit stream'),
       content: SizedBox(
         width: 560,
-        child: Form(
-          key: _formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              _Field(controller: _id, label: 'ID', enabled: widget.item == null),
-              _Field(controller: _name, label: 'Name'),
-              _Field(controller: _input, label: 'Input URL'),
-              _Field(controller: _output, label: 'Output URL'),
-              DropdownButtonFormField<String>(
-                value: _profile,
-                decoration: const InputDecoration(labelText: 'Profile'),
-                items: widget.profiles
-                    .map(
-                      (Profile profile) => DropdownMenuItem<String>(
-                        value: profile.name,
-                        child: Text(profile.name),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (String? value) => setState(() => _profile = value),
-              ),
-              CheckboxListTile(
-                value: _enabled,
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Enabled'),
-                onChanged: (bool? value) => setState(() => _enabled = value ?? false),
-              ),
-            ],
+        child: SingleChildScrollView(
+          child: Form(
+            key: _formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                _Field(controller: _id, label: 'ID', enabled: widget.item == null),
+                _Field(controller: _name, label: 'Name'),
+                SegmentedButton<String>(
+                  segments: const <ButtonSegment<String>>[
+                    ButtonSegment<String>(
+                      value: 'multicast',
+                      icon: Icon(Icons.settings_input_antenna),
+                      label: Text('Multicast'),
+                    ),
+                    ButtonSegment<String>(
+                      value: 'file',
+                      icon: Icon(Icons.video_file_outlined),
+                      label: Text('File'),
+                    ),
+                  ],
+                  selected: <String>{_sourceType},
+                  onSelectionChanged: (Set<String> value) => setState(() => _sourceType = value.first),
+                ),
+                const SizedBox(height: 12),
+                _Field(controller: _input, label: _sourceType == 'file' ? 'Input file path' : 'Input multicast URL'),
+                _Field(controller: _output, label: 'Output URL'),
+                _Field(controller: _logRetention, label: 'Log retention seconds'),
+                DropdownButtonFormField<String>(
+                  value: _profile,
+                  decoration: const InputDecoration(labelText: 'Profile'),
+                  items: widget.profiles
+                      .map(
+                        (Profile profile) => DropdownMenuItem<String>(
+                          value: profile.name,
+                          child: Text(profile.name),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (String? value) => setState(() => _profile = value),
+                ),
+                CheckboxListTile(
+                  value: _enabled,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Enabled'),
+                  onChanged: (bool? value) => setState(() => _enabled = value ?? false),
+                ),
+                CheckboxListTile(
+                  value: _disableAudio,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Remove audio'),
+                  onChanged: (bool? value) => setState(() => _disableAudio = value ?? false),
+                ),
+                if (!_disableAudio)
+                  TextFormField(
+                    controller: _audioMaps,
+                    minLines: 2,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      labelText: 'Audio maps',
+                      helperText: 'One FFmpeg audio map per line. Empty means 0:a:0?. Example: 0:a:0',
+                    ),
+                  ),
+                CheckboxListTile(
+                  value: _logoEnabled,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Add logo overlay'),
+                  onChanged: (bool? value) => setState(() => _logoEnabled = value ?? false),
+                ),
+                if (_logoEnabled) ...<Widget>[
+                  _Field(controller: _logoPath, label: 'Logo file path'),
+                  Row(
+                    children: <Widget>[
+                      Expanded(child: _Field(controller: _logoX, label: 'Logo X')),
+                      const SizedBox(width: 12),
+                      Expanded(child: _Field(controller: _logoY, label: 'Logo Y')),
+                    ],
+                  ),
+                ],
+                TextFormField(
+                  controller: _options,
+                  minLines: 3,
+                  maxLines: 6,
+                  decoration: const InputDecoration(
+                    labelText: 'Profile options',
+                    helperText: 'One key=value per line. Values override template defaults.',
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -400,24 +450,61 @@ class _StreamDialogState extends State<_StreamDialog> {
     if (!(_formKey.currentState?.validate() ?? false) || _profile == null) {
       return;
     }
+    final int retention = int.tryParse(_logRetention.text.trim()) ?? 60;
     Navigator.of(context).pop(<String, Object?>{
       'id': _id.text.trim(),
       'name': _name.text.trim(),
       'input_url': _input.text.trim(),
       'output_url': _output.text.trim(),
+      'source_type': _sourceType,
       'profile_name': _profile,
+      'audio_maps': _disableAudio ? <String>[] : _lines(_audioMaps.text),
+      'disable_audio': _disableAudio,
+      'logo': <String, Object?>{
+        'enabled': _logoEnabled,
+        'path': _logoPath.text.trim(),
+        'x': int.tryParse(_logoX.text.trim()) ?? 0,
+        'y': int.tryParse(_logoY.text.trim()) ?? 0,
+      },
+      'options': _parseKeyValues(_options.text),
+      'log_retention_seconds': retention,
       'enabled': _enabled,
     });
   }
 }
 
+List<String> _lines(String value) {
+  return value.split('\n').map((String item) => item.trim()).where((String item) => item.isNotEmpty).toList();
+}
+
+Map<String, String> _parseKeyValues(String value) {
+  final Map<String, String> out = <String, String>{};
+  for (final String line in value.split('\n')) {
+    final String trimmed = line.trim();
+    if (trimmed.isEmpty) {
+      continue;
+    }
+    final int index = trimmed.indexOf('=');
+    if (index <= 0) {
+      continue;
+    }
+    out[trimmed.substring(0, index).trim()] = trimmed.substring(index + 1).trim();
+  }
+  return out;
+}
+
+String _encodeKeyValues(Map<String, String> values) {
+  final List<String> keys = values.keys.toList()..sort();
+  return keys.map((String key) => '$key=${values[key]}').join('\n');
+}
+
 class _ProbeDialog extends StatefulWidget {
   const _ProbeDialog({
-    required this.api,
+    required this.cubit,
     super.key,
   });
 
-  final ApiClient api;
+  final StreamsCubit cubit;
 
   @override
   State<_ProbeDialog> createState() => _ProbeDialogState();
@@ -473,7 +560,7 @@ class _ProbeDialogState extends State<_ProbeDialog> {
   Future<void> _probe() async {
     setState(() => _loading = true);
     try {
-      final ProbeResult result = await widget.api.probe(_input.text.trim());
+      final ProbeResult result = await widget.cubit.probe(_input.text.trim());
       if (!mounted) {
         return;
       }

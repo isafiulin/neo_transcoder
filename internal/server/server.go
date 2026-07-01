@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"neotranscoder/internal/auth"
 	"neotranscoder/internal/buildinfo"
 	"neotranscoder/internal/config"
 	"neotranscoder/internal/doctor"
@@ -23,6 +23,10 @@ import (
 
 //go:embed static/*
 var embeddedWeb embed.FS
+
+type contextKey string
+
+const userContextKey contextKey = "user"
 
 type Server struct {
 	cfg   config.Config
@@ -48,10 +52,18 @@ func (s *Server) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/auth/required", s.authRequired)
+	mux.HandleFunc("POST /api/auth/login", s.login)
+	mux.HandleFunc("POST /api/auth/refresh", s.refresh)
+	mux.HandleFunc("GET /api/auth/verify", s.verify)
+	mux.HandleFunc("POST /api/auth/change-password", s.changeOwnPassword)
 	mux.HandleFunc("GET /api/doctor", s.doctor)
 	mux.HandleFunc("GET /api/events", s.events)
 	mux.HandleFunc("GET /api/metrics", s.metrics)
 	mux.HandleFunc("GET /api/logs", s.logs)
+	mux.HandleFunc("GET /api/users", s.listUsers)
+	mux.HandleFunc("POST /api/users", s.createUser)
+	mux.HandleFunc("PUT /api/users/{username}/password", s.changeUserPassword)
+	mux.HandleFunc("DELETE /api/users/{username}", s.deleteUser)
 	mux.HandleFunc("POST /api/probe", s.probe)
 	mux.HandleFunc("GET /api/profiles", s.listProfiles)
 	mux.HandleFunc("POST /api/profiles", s.upsertProfile)
@@ -94,32 +106,202 @@ func (s *Server) Run(ctx context.Context) error {
 
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.Auth.Token == "" ||
-			r.URL.Path == "/api/health" ||
+		if r.URL.Path == "/api/health" ||
 			r.URL.Path == "/api/auth/required" ||
+			r.URL.Path == "/api/auth/login" ||
+			r.URL.Path == "/api/auth/refresh" ||
 			!strings.HasPrefix(r.URL.Path, "/api/") {
 			next.ServeHTTP(w, r)
 			return
 		}
-		const prefix = "Bearer "
-		header := r.Header.Get("Authorization")
-		if !strings.HasPrefix(header, prefix) {
-			writeErrorText(w, http.StatusUnauthorized, "missing bearer token")
+		user, ok := s.userFromRequest(w, r, "access")
+		if !ok {
 			return
 		}
-		token := strings.TrimPrefix(header, prefix)
-		if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Auth.Token)) != 1 {
-			writeErrorText(w, http.StatusUnauthorized, "invalid bearer token")
-			return
-		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, user)))
 	})
 }
 
 func (s *Server) authRequired(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"required": s.cfg.Auth.Token != "",
+		"required": true,
 	})
+}
+
+func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	user, ok := s.store.Authenticate(req.Username, req.Password)
+	if !ok {
+		writeErrorText(w, http.StatusUnauthorized, "invalid username or password")
+		return
+	}
+	s.writeTokenPair(w, user)
+}
+
+func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	claims, err := auth.VerifyToken(s.store.AuthSecret(), req.RefreshToken, "refresh", time.Now())
+	if err != nil {
+		writeErrorText(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	user, ok := s.store.VerifyTokenClaims(claims)
+	if !ok {
+		writeErrorText(w, http.StatusUnauthorized, "invalid refresh token")
+		return
+	}
+	s.writeTokenPair(w, user)
+}
+
+func (s *Server) verify(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.userFromRequest(w, r, "access")
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"valid": true,
+		"user":  auth.Public(user),
+	})
+}
+
+func (s *Server) changeOwnPassword(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.userFromRequest(w, r, "access")
+	if !ok {
+		return
+	}
+	var req struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	updated, err := s.store.ChangePassword(user.Username, req.CurrentPassword, req.NewPassword, true)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) listUsers(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.store.ListUsers())
+}
+
+func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	user, err := s.store.CreateUser(req.Username, req.Password)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, user)
+}
+
+func (s *Server) changeUserPassword(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Password string `json:"password"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	user, err := s.store.ChangePassword(r.PathValue("username"), "", req.Password, false)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
+func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
+	deleted, err := s.store.DeleteUser(r.PathValue("username"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !deleted {
+		writeErrorText(w, http.StatusNotFound, "user not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) writeTokenPair(w http.ResponseWriter, user auth.User) {
+	now := time.Now()
+	accessExpires := now.Add(auth.AccessTokenTTL)
+	refreshExpires := now.Add(auth.RefreshTokenTTL)
+	accessToken, err := auth.IssueToken(s.store.AuthSecret(), auth.Claims{
+		Subject:      user.Username,
+		Type:         "access",
+		TokenVersion: user.TokenVersion,
+		ExpiresAt:    accessExpires,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	refreshToken, err := auth.IssueToken(s.store.AuthSecret(), auth.Claims{
+		Subject:      user.Username,
+		Type:         "refresh",
+		TokenVersion: user.TokenVersion,
+		ExpiresAt:    refreshExpires,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"access_token":         accessToken,
+		"refresh_token":        refreshToken,
+		"access_expires_at":    accessExpires,
+		"refresh_expires_at":   refreshExpires,
+		"must_change_password": user.MustChangePassword,
+		"user":                 auth.Public(user),
+	})
+}
+
+func (s *Server) userFromRequest(w http.ResponseWriter, r *http.Request, kind string) (auth.User, bool) {
+	const prefix = "Bearer "
+	header := r.Header.Get("Authorization")
+	token := ""
+	if strings.HasPrefix(header, prefix) {
+		token = strings.TrimPrefix(header, prefix)
+	}
+	if token == "" && r.URL.Path == "/api/events" {
+		token = r.URL.Query().Get("access_token")
+	}
+	if token == "" {
+		writeErrorText(w, http.StatusUnauthorized, "missing bearer token")
+		return auth.User{}, false
+	}
+	claims, err := auth.VerifyToken(s.store.AuthSecret(), token, kind, time.Now())
+	if err != nil {
+		writeErrorText(w, http.StatusUnauthorized, err.Error())
+		return auth.User{}, false
+	}
+	user, ok := s.store.VerifyTokenClaims(claims)
+	if !ok {
+		writeErrorText(w, http.StatusUnauthorized, "invalid bearer token")
+		return auth.User{}, false
+	}
+	return user, true
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -314,10 +496,20 @@ func (s *Server) ffmpegCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	args, err := ffmpeg.BuildArgs(ffmpeg.Stream{
-		InputURL:  view.Config.InputURL,
-		OutputURL: view.Config.OutputURL,
-		VideoMap:  view.Config.VideoMap,
-		AudioMap:  view.Config.AudioMap,
+		InputURL:     view.Config.InputURL,
+		OutputURL:    view.Config.OutputURL,
+		SourceType:   view.Config.SourceType,
+		VideoMap:     view.Config.VideoMap,
+		AudioMap:     view.Config.AudioMap,
+		AudioMaps:    view.Config.AudioMaps,
+		DisableAudio: view.Config.DisableAudio,
+		Logo: ffmpeg.LogoOverlay{
+			Enabled: view.Config.Logo.Enabled,
+			Path:    view.Config.Logo.Path,
+			X:       view.Config.Logo.X,
+			Y:       view.Config.Logo.Y,
+		},
+		Options: view.Config.Options,
 	}, profile)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -339,7 +531,20 @@ func (s *Server) web() http.Handler {
 	if err != nil {
 		panic(fmt.Sprintf("embedded web: %v", err))
 	}
-	return http.FileServer(http.FS(root))
+	files := http.FileServer(http.FS(root))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path == "" {
+			files.ServeHTTP(w, r)
+			return
+		}
+		if _, err := fs.Stat(root, path); err == nil {
+			files.ServeHTTP(w, r)
+			return
+		}
+		r.URL.Path = "/"
+		files.ServeHTTP(w, r)
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

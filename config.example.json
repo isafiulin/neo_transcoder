@@ -3,9 +3,6 @@
     "bind": "0.0.0.0",
     "port": 8080
   },
-  "auth": {
-    "token": ""
-  },
   "ffmpeg": {
     "path": "/usr/bin/ffmpeg",
     "ffprobe_path": "/usr/bin/ffprobe"
