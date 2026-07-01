@@ -3,10 +3,10 @@ import 'dart:async';
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../../core/api/api_client.dart';
-import '../../core/api/models.dart';
-import '../../core/state/load_status.dart';
-import '../../data/repositories/transcoder_repository.dart';
+import 'package:neotranscoder_ui/core/api/api_client.dart';
+import 'package:neotranscoder_ui/core/api/models.dart';
+import 'package:neotranscoder_ui/core/state/load_status.dart';
+import 'package:neotranscoder_ui/data/repositories/transcoder_repository.dart';
 
 class DashboardState extends Equatable {
   const DashboardState({
@@ -59,14 +59,41 @@ class DashboardCubit extends Cubit<DashboardState> {
 
   final TranscoderRepository _repository;
   StreamSubscription<ApiEvent>? _events;
+  bool _loading = false;
+  bool _reloadQueued = false;
 
   Future<void> load() async {
-    emit(state.copyWith(status: LoadStatus.loading, error: ''));
+    if (isClosed) {
+      return;
+    }
+    if (_loading) {
+      _reloadQueued = true;
+      return;
+    }
+    _loading = true;
+    final LoadStatus status =
+        state.status == LoadStatus.initial || state.status == LoadStatus.failure
+            ? LoadStatus.loading
+            : state.status;
+    emit(state.copyWith(status: status, error: ''));
     try {
       final List<StreamView> streams = await _repository.metrics();
+      if (isClosed) {
+        return;
+      }
       emit(state.copyWith(status: LoadStatus.ready, streams: streams));
     } on Object catch (error) {
-      emit(state.copyWith(status: LoadStatus.failure, error: apiErrorMessage(error)));
+      if (isClosed) {
+        return;
+      }
+      emit(state.copyWith(
+          status: LoadStatus.failure, error: apiErrorMessage(error)));
+    } finally {
+      _loading = false;
+      if (_reloadQueued && !isClosed) {
+        _reloadQueued = false;
+        unawaited(load());
+      }
     }
   }
 
@@ -76,10 +103,25 @@ class DashboardCubit extends Cubit<DashboardState> {
 
   void subscribe() {
     _events ??= _repository.events().listen((ApiEvent event) {
-      if (event.type.startsWith('stream_')) {
+      if (_refreshEvents.contains(event.type)) {
         load();
       }
     });
+  }
+
+  Future<void> startStream(String id) async {
+    await _repository.startStream(id);
+    await load();
+  }
+
+  Future<void> stopStream(String id) async {
+    await _repository.stopStream(id);
+    await load();
+  }
+
+  Future<void> restartStream(String id) async {
+    await _repository.restartStream(id);
+    await load();
   }
 
   @override
@@ -88,3 +130,9 @@ class DashboardCubit extends Cubit<DashboardState> {
     return super.close();
   }
 }
+
+const Set<String> _refreshEvents = <String>{
+  'stream_saved',
+  'stream_deleted',
+  'stream_state',
+};

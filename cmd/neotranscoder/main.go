@@ -36,6 +36,8 @@ func run(args []string) int {
 		return runConfig(args[1:])
 	case "uninstall":
 		return runScript("/usr/local/lib/neotranscoder/uninstall.sh", args[1:])
+	case "update":
+		return runScript("/usr/local/lib/neotranscoder/update.sh", args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n", args[0])
 		usage()
@@ -142,5 +144,5 @@ func runScript(path string, args []string) int {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: neotranscoder [serve|version|doctor|config|uninstall]")
+	fmt.Fprintln(os.Stderr, "usage: neotranscoder [serve|version|doctor|config|update|uninstall]")
 }

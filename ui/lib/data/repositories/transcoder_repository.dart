@@ -1,5 +1,5 @@
-import '../../core/api/api_client.dart';
-import '../../core/api/models.dart';
+import 'package:neotranscoder_ui/core/api/api_client.dart';
+import 'package:neotranscoder_ui/core/api/models.dart';
 
 class TranscoderRepository {
   TranscoderRepository({required ApiClient api}) : _api = api;

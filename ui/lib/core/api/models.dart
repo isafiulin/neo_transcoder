@@ -4,15 +4,16 @@ class StreamView {
     required this.state,
   });
 
-  final StreamConfig config;
-  final StreamState state;
-
   factory StreamView.fromJson(Map<String, dynamic> json) {
     return StreamView(
-      config: StreamConfig.fromJson(json['config'] as Map<String, dynamic>? ?? {}),
+      config:
+          StreamConfig.fromJson(json['config'] as Map<String, dynamic>? ?? {}),
       state: StreamState.fromJson(json['state'] as Map<String, dynamic>? ?? {}),
     );
   }
+
+  final StreamConfig config;
+  final StreamState state;
 }
 
 class StreamConfig {
@@ -31,6 +32,29 @@ class StreamConfig {
     required this.logRetentionSeconds,
   });
 
+  factory StreamConfig.fromJson(Map<String, dynamic> json) {
+    return StreamConfig(
+      id: json['id'] as String? ?? '',
+      name: json['name'] as String? ?? '',
+      inputUrl: json['input_url'] as String? ?? '',
+      outputUrl: json['output_url'] as String? ?? '',
+      sourceType: json['source_type'] as String? ?? 'multicast',
+      profileName: json['profile_name'] as String? ?? '',
+      enabled: json['enabled'] as bool? ?? false,
+      audioMaps:
+          (json['audio_maps'] as List<dynamic>? ?? <dynamic>[]).cast<String>(),
+      disableAudio: json['disable_audio'] as bool? ?? false,
+      logo: LogoOverlay.fromJson(
+          json['logo'] as Map<String, dynamic>? ?? <String, dynamic>{}),
+      options:
+          (json['options'] as Map<String, dynamic>? ?? <String, dynamic>{}).map(
+        (String key, dynamic value) =>
+            MapEntry<String, String>(key, value as String? ?? ''),
+      ),
+      logRetentionSeconds: json['log_retention_seconds'] as int? ?? 60,
+    );
+  }
+
   final String id;
   final String name;
   final String inputUrl;
@@ -43,25 +67,6 @@ class StreamConfig {
   final LogoOverlay logo;
   final Map<String, String> options;
   final int logRetentionSeconds;
-
-  factory StreamConfig.fromJson(Map<String, dynamic> json) {
-    return StreamConfig(
-      id: json['id'] as String? ?? '',
-      name: json['name'] as String? ?? '',
-      inputUrl: json['input_url'] as String? ?? '',
-      outputUrl: json['output_url'] as String? ?? '',
-      sourceType: json['source_type'] as String? ?? 'multicast',
-      profileName: json['profile_name'] as String? ?? '',
-      enabled: json['enabled'] as bool? ?? false,
-      audioMaps: (json['audio_maps'] as List<dynamic>? ?? <dynamic>[]).cast<String>(),
-      disableAudio: json['disable_audio'] as bool? ?? false,
-      logo: LogoOverlay.fromJson(json['logo'] as Map<String, dynamic>? ?? <String, dynamic>{}),
-      options: (json['options'] as Map<String, dynamic>? ?? <String, dynamic>{}).map(
-        (String key, dynamic value) => MapEntry<String, String>(key, value as String? ?? ''),
-      ),
-      logRetentionSeconds: json['log_retention_seconds'] as int? ?? 60,
-    );
-  }
 }
 
 class LogoOverlay {
@@ -72,11 +77,6 @@ class LogoOverlay {
     required this.y,
   });
 
-  final bool enabled;
-  final String path;
-  final int x;
-  final int y;
-
   factory LogoOverlay.fromJson(Map<String, dynamic> json) {
     return LogoOverlay(
       enabled: json['enabled'] as bool? ?? false,
@@ -85,6 +85,11 @@ class LogoOverlay {
       y: json['y'] as int? ?? 0,
     );
   }
+
+  final bool enabled;
+  final String path;
+  final int x;
+  final int y;
 }
 
 class StreamState {
@@ -98,18 +103,6 @@ class StreamState {
     this.metrics,
     this.process,
   });
-
-  final String status;
-  final int pid;
-  final String errorCode;
-  final String lastError;
-  final int restartCount;
-  final bool flapping;
-  final MediaMetrics? metrics;
-  final ProcessMetrics? process;
-
-  bool get isRunning => status == 'running';
-  bool get hasError => status == 'error' || status == 'flapping' || errorCode.isNotEmpty;
 
   factory StreamState.fromJson(Map<String, dynamic> json) {
     return StreamState(
@@ -127,6 +120,19 @@ class StreamState {
           : null,
     );
   }
+
+  final String status;
+  final int pid;
+  final String errorCode;
+  final String lastError;
+  final int restartCount;
+  final bool flapping;
+  final MediaMetrics? metrics;
+  final ProcessMetrics? process;
+
+  bool get isRunning => status == 'running';
+  bool get hasError =>
+      status == 'error' || status == 'flapping' || errorCode.isNotEmpty;
 }
 
 class MediaMetrics {
@@ -138,12 +144,6 @@ class MediaMetrics {
     required this.outTime,
   });
 
-  final int frame;
-  final double fps;
-  final String bitrate;
-  final String speed;
-  final String outTime;
-
   factory MediaMetrics.fromJson(Map<String, dynamic> json) {
     return MediaMetrics(
       frame: json['frame'] as int? ?? 0,
@@ -153,6 +153,12 @@ class MediaMetrics {
       outTime: json['out_time'] as String? ?? '',
     );
   }
+
+  final int frame;
+  final double fps;
+  final String bitrate;
+  final String speed;
+  final String outTime;
 }
 
 class ProcessMetrics {
@@ -161,15 +167,15 @@ class ProcessMetrics {
     required this.memoryBytes,
   });
 
-  final double cpuPercent;
-  final int memoryBytes;
-
   factory ProcessMetrics.fromJson(Map<String, dynamic> json) {
     return ProcessMetrics(
       cpuPercent: (json['cpu_percent'] as num?)?.toDouble() ?? 0,
       memoryBytes: json['memory_bytes'] as int? ?? 0,
     );
   }
+
+  final double cpuPercent;
+  final int memoryBytes;
 }
 
 class Profile {
@@ -188,19 +194,6 @@ class Profile {
     required this.templateDefaults,
   });
 
-  final String name;
-  final String videoCodec;
-  final String videoPreset;
-  final String videoTune;
-  final String videoBitrate;
-  final String videoMaxrate;
-  final String videoBufsize;
-  final String audioCodec;
-  final String audioBitrate;
-  final String outputFormat;
-  final List<String> templateArgs;
-  final Map<String, String> templateDefaults;
-
   factory Profile.fromJson(Map<String, dynamic> json) {
     final video = json['video'] as Map<String, dynamic>? ?? {};
     final audio = json['audio'] as Map<String, dynamic>? ?? {};
@@ -217,12 +210,29 @@ class Profile {
       audioCodec: audio['codec'] as String? ?? '',
       audioBitrate: audio['bitrate'] as String? ?? '',
       outputFormat: output['format'] as String? ?? '',
-      templateArgs: (template['args'] as List<dynamic>? ?? <dynamic>[]).cast<String>(),
-      templateDefaults: (template['defaults'] as Map<String, dynamic>? ?? <String, dynamic>{}).map(
-        (String key, dynamic value) => MapEntry<String, String>(key, value as String? ?? ''),
+      templateArgs:
+          (template['args'] as List<dynamic>? ?? <dynamic>[]).cast<String>(),
+      templateDefaults:
+          (template['defaults'] as Map<String, dynamic>? ?? <String, dynamic>{})
+              .map(
+        (String key, dynamic value) =>
+            MapEntry<String, String>(key, value as String? ?? ''),
       ),
     );
   }
+
+  final String name;
+  final String videoCodec;
+  final String videoPreset;
+  final String videoTune;
+  final String videoBitrate;
+  final String videoMaxrate;
+  final String videoBufsize;
+  final String audioCodec;
+  final String audioBitrate;
+  final String outputFormat;
+  final List<String> templateArgs;
+  final Map<String, String> templateDefaults;
 }
 
 class LogEntry {
@@ -234,12 +244,6 @@ class LogEntry {
     required this.time,
   });
 
-  final String streamId;
-  final String level;
-  final String code;
-  final String message;
-  final String time;
-
   factory LogEntry.fromJson(Map<String, dynamic> json) {
     return LogEntry(
       streamId: json['stream_id'] as String? ?? '',
@@ -249,6 +253,12 @@ class LogEntry {
       time: json['time'] as String? ?? '',
     );
   }
+
+  final String streamId;
+  final String level;
+  final String code;
+  final String message;
+  final String time;
 }
 
 class CommandPreview {
@@ -257,15 +267,15 @@ class CommandPreview {
     required this.args,
   });
 
-  final String path;
-  final List<String> args;
-
   factory CommandPreview.fromJson(Map<String, dynamic> json) {
     return CommandPreview(
       path: json['path'] as String? ?? '',
       args: (json['args'] as List<dynamic>? ?? []).cast<String>(),
     );
   }
+
+  final String path;
+  final List<String> args;
 }
 
 class UserAccount {
@@ -276,11 +286,6 @@ class UserAccount {
     required this.updatedAt,
   });
 
-  final String username;
-  final bool mustChangePassword;
-  final String createdAt;
-  final String updatedAt;
-
   factory UserAccount.fromJson(Map<String, dynamic> json) {
     return UserAccount(
       username: json['username'] as String? ?? '',
@@ -289,6 +294,11 @@ class UserAccount {
       updatedAt: json['updated_at'] as String? ?? '',
     );
   }
+
+  final String username;
+  final bool mustChangePassword;
+  final String createdAt;
+  final String updatedAt;
 }
 
 class AuthSession {
@@ -299,19 +309,20 @@ class AuthSession {
     required this.user,
   });
 
-  final String accessToken;
-  final String refreshToken;
-  final bool mustChangePassword;
-  final UserAccount user;
-
   factory AuthSession.fromJson(Map<String, dynamic> json) {
     return AuthSession(
       accessToken: json['access_token'] as String? ?? '',
       refreshToken: json['refresh_token'] as String? ?? '',
       mustChangePassword: json['must_change_password'] as bool? ?? false,
-      user: UserAccount.fromJson(json['user'] as Map<String, dynamic>? ?? <String, dynamic>{}),
+      user: UserAccount.fromJson(
+          json['user'] as Map<String, dynamic>? ?? <String, dynamic>{}),
     );
   }
+
+  final String accessToken;
+  final String refreshToken;
+  final bool mustChangePassword;
+  final UserAccount user;
 }
 
 class ApiEvent {
@@ -320,15 +331,15 @@ class ApiEvent {
     this.streamId = '',
   });
 
-  final String type;
-  final String streamId;
-
   factory ApiEvent.fromJson(Map<String, dynamic> json) {
     return ApiEvent(
       type: json['type'] as String? ?? '',
       streamId: json['stream_id'] as String? ?? '',
     );
   }
+
+  final String type;
+  final String streamId;
 }
 
 class ProbeResult {
@@ -338,20 +349,22 @@ class ProbeResult {
     required this.streams,
   });
 
-  final String formatName;
-  final String bitRate;
-  final List<ProbeStream> streams;
-
   factory ProbeResult.fromJson(Map<String, dynamic> json) {
-    final Map<String, dynamic> format = json['format'] as Map<String, dynamic>? ?? <String, dynamic>{};
+    final Map<String, dynamic> format =
+        json['format'] as Map<String, dynamic>? ?? <String, dynamic>{};
     return ProbeResult(
       formatName: format['format_name'] as String? ?? '',
       bitRate: format['bit_rate'] as String? ?? '',
       streams: (json['streams'] as List<dynamic>? ?? <dynamic>[])
-          .map((dynamic item) => ProbeStream.fromJson(item as Map<String, dynamic>))
+          .map((dynamic item) =>
+              ProbeStream.fromJson(item as Map<String, dynamic>))
           .toList(),
     );
   }
+
+  final String formatName;
+  final String bitRate;
+  final List<ProbeStream> streams;
 }
 
 class ProbeStream {
@@ -363,15 +376,10 @@ class ProbeStream {
     required this.height,
     required this.bitRate,
     required this.avgFrameRate,
+    required this.channels,
+    required this.channelLayout,
+    required this.tags,
   });
-
-  final int index;
-  final String codecType;
-  final String codecName;
-  final int width;
-  final int height;
-  final String bitRate;
-  final String avgFrameRate;
 
   factory ProbeStream.fromJson(Map<String, dynamic> json) {
     return ProbeStream(
@@ -382,6 +390,23 @@ class ProbeStream {
       height: json['height'] as int? ?? 0,
       bitRate: json['bit_rate'] as String? ?? '',
       avgFrameRate: json['avg_frame_rate'] as String? ?? '',
+      channels: json['channels'] as int? ?? 0,
+      channelLayout: json['channel_layout'] as String? ?? '',
+      tags: (json['tags'] as Map<String, dynamic>? ?? <String, dynamic>{}).map(
+        (String key, dynamic value) =>
+            MapEntry<String, String>(key, value?.toString() ?? ''),
+      ),
     );
   }
+
+  final int index;
+  final String codecType;
+  final String codecName;
+  final int width;
+  final int height;
+  final String bitRate;
+  final String avgFrameRate;
+  final int channels;
+  final String channelLayout;
+  final Map<String, String> tags;
 }

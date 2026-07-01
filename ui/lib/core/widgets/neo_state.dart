@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../app/theme.dart';
+import 'package:neotranscoder_ui/app/theme.dart';
 import 'neo_button.dart';
 
 class NeoLoadingState extends StatelessWidget {
@@ -85,7 +85,8 @@ class NeoErrorState extends StatelessWidget {
           children: <Widget>[
             const Icon(Icons.error_outline, color: NeoColors.danger, size: 34),
             const SizedBox(height: NeoSpacing.md),
-            Text('Could not load data', style: Theme.of(context).textTheme.titleMedium),
+            Text('Could not load data',
+                style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: NeoSpacing.xs),
             Text(message, style: Theme.of(context).textTheme.labelMedium),
             const SizedBox(height: NeoSpacing.lg),

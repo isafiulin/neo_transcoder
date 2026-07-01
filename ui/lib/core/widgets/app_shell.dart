@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../app/app_routes.dart';
-import '../../app/session_cubit.dart';
-import '../../app/theme.dart';
+import 'package:neotranscoder_ui/app/app_routes.dart';
+import 'package:neotranscoder_ui/app/session_cubit.dart';
+import 'package:neotranscoder_ui/app/theme.dart';
 
 class AppShell extends StatelessWidget {
   const AppShell({
@@ -44,7 +44,7 @@ class AppShell extends StatelessWidget {
 }
 
 class _ContentFrame extends StatelessWidget {
-  const _ContentFrame({required this.child, super.key});
+  const _ContentFrame({required this.child});
 
   final Widget child;
 
@@ -52,8 +52,7 @@ class _ContentFrame extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: <Widget>[
-        if (MediaQuery.sizeOf(context).width >= 980)
-          const _TopBar(),
+        if (MediaQuery.sizeOf(context).width >= 980) const _TopBar(),
         Expanded(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(NeoSpacing.xl),
@@ -71,7 +70,7 @@ class _ContentFrame extends StatelessWidget {
 }
 
 class _TopBar extends StatelessWidget {
-  const _TopBar({super.key});
+  const _TopBar();
 
   @override
   Widget build(BuildContext context) {
@@ -89,9 +88,11 @@ class _TopBar extends StatelessWidget {
           child: Row(
             children: <Widget>[
               const Spacer(),
-              const Icon(Icons.cloud_done_outlined, color: NeoColors.success, size: 18),
+              const Icon(Icons.cloud_done_outlined,
+                  color: NeoColors.success, size: 18),
               const SizedBox(width: NeoSpacing.sm),
-              Text('API connected', style: Theme.of(context).textTheme.labelMedium),
+              Text('API connected',
+                  style: Theme.of(context).textTheme.labelMedium),
               const SizedBox(width: NeoSpacing.lg),
               IconButton(
                 tooltip: 'Logout',
@@ -112,7 +113,6 @@ class _TopBar extends StatelessWidget {
 class _SideNav extends StatelessWidget {
   const _SideNav({
     required this.location,
-    super.key,
   });
 
   final String location;
@@ -132,7 +132,6 @@ class _SideNav extends StatelessWidget {
 class _SideNavContent extends StatelessWidget {
   const _SideNavContent({
     required this.location,
-    super.key,
   });
 
   final String location;
@@ -202,7 +201,7 @@ class _SideNavContent extends StatelessWidget {
 }
 
 class _BrandHeader extends StatelessWidget {
-  const _BrandHeader({this.compact = false, super.key});
+  const _BrandHeader({this.compact = false});
 
   final bool compact;
 
@@ -228,7 +227,6 @@ class _NavItem extends StatelessWidget {
     required this.path,
     required this.selected,
     this.onTap,
-    super.key,
   });
 
   final IconData icon;
@@ -241,9 +239,12 @@ class _NavItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final Color color = selected ? NeoColors.blueDark : NeoColors.muted;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: NeoSpacing.md, vertical: 3),
+      padding:
+          const EdgeInsets.symmetric(horizontal: NeoSpacing.md, vertical: 3),
       child: Material(
-        color: selected ? NeoColors.blue.withOpacity(0.10) : Colors.transparent,
+        color: selected
+            ? NeoColors.blue.withValues(alpha: 0.10)
+            : Colors.transparent,
         borderRadius: BorderRadius.circular(NeoRadius.md),
         child: InkWell(
           borderRadius: BorderRadius.circular(NeoRadius.md),

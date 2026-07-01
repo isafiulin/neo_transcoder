@@ -22,7 +22,7 @@ rm -f /usr/local/bin/neotranscoder
 rm -rf /usr/local/lib/neotranscoder
 
 if [ "$PURGE" -eq 1 ]; then
-  rm -rf /etc/neotranscoder /var/lib/neotranscoder /var/log/neotranscoder /opt/neotranscoder
+  rm -rf /etc/neotranscoder /var/lib/neotranscoder /var/log/neotranscoder
   userdel neotranscoder >/dev/null 2>&1 || true
   echo "NeoTranscoder fully removed"
 else

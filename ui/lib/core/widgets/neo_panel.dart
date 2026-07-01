@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../app/theme.dart';
+import 'package:neotranscoder_ui/app/theme.dart';
 
 class NeoPanel extends StatelessWidget {
   const NeoPanel({

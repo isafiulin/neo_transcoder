@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../../core/api/models.dart';
-import '../../core/design_system/status.dart';
-import '../../core/state/load_status.dart';
-import '../../core/widgets/neo_badge.dart';
-import '../../core/widgets/neo_button.dart';
-import '../../core/widgets/neo_panel.dart';
-import '../../core/widgets/neo_search_field.dart';
-import '../../core/widgets/neo_state.dart';
+import 'package:neotranscoder_ui/core/api/models.dart';
+import 'package:neotranscoder_ui/core/design_system/status.dart';
+import 'package:neotranscoder_ui/core/state/load_status.dart';
+import 'package:neotranscoder_ui/core/widgets/neo_badge.dart';
+import 'package:neotranscoder_ui/core/widgets/neo_button.dart';
+import 'package:neotranscoder_ui/core/widgets/neo_panel.dart';
+import 'package:neotranscoder_ui/core/widgets/neo_search_field.dart';
+import 'package:neotranscoder_ui/core/widgets/neo_state.dart';
 import 'logs_cubit.dart';
 
 class LogsScreen extends StatefulWidget {
@@ -63,11 +63,13 @@ class _LogsScreenState extends State<LogsScreen> {
 
   Widget _content(LogsState state, List<LogEntry> logs) {
     final String? error = state.error.isEmpty ? null : state.error;
-    if (state.status == LoadStatus.loading || state.status == LoadStatus.initial) {
+    if (state.status == LoadStatus.loading ||
+        state.status == LoadStatus.initial) {
       return const NeoLoadingState(label: 'Loading logs');
     }
     if (error != null) {
-      return NeoErrorState(message: error, onRetry: context.read<LogsCubit>().load);
+      return NeoErrorState(
+          message: error, onRetry: context.read<LogsCubit>().load);
     }
     if (logs.isEmpty) {
       return const NeoEmptyState(
@@ -82,7 +84,7 @@ class _LogsScreenState extends State<LogsScreen> {
 }
 
 class _LogRow extends StatelessWidget {
-  const _LogRow({required this.item, super.key});
+  const _LogRow({required this.item});
 
   final LogEntry item;
 
@@ -103,7 +105,9 @@ class _LogRow extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             SizedBox(width: 170, child: Text(item.time)),
-            SizedBox(width: 120, child: Text(item.streamId.isEmpty ? '-' : item.streamId)),
+            SizedBox(
+                width: 120,
+                child: Text(item.streamId.isEmpty ? '-' : item.streamId)),
             SizedBox(width: 96, child: NeoBadge(label: item.level, tone: tone)),
             if (item.code.isNotEmpty)
               SizedBox(width: 150, child: Text(item.code))

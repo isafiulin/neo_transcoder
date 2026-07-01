@@ -20,13 +20,16 @@ type Format struct {
 }
 
 type Stream struct {
-	Index        int    `json:"index"`
-	CodecType    string `json:"codec_type"`
-	CodecName    string `json:"codec_name"`
-	Width        int    `json:"width,omitempty"`
-	Height       int    `json:"height,omitempty"`
-	BitRate      string `json:"bit_rate,omitempty"`
-	AvgFrameRate string `json:"avg_frame_rate,omitempty"`
+	Index         int               `json:"index"`
+	CodecType     string            `json:"codec_type"`
+	CodecName     string            `json:"codec_name"`
+	Width         int               `json:"width,omitempty"`
+	Height        int               `json:"height,omitempty"`
+	BitRate       string            `json:"bit_rate,omitempty"`
+	AvgFrameRate  string            `json:"avg_frame_rate,omitempty"`
+	Channels      int               `json:"channels,omitempty"`
+	ChannelLayout string            `json:"channel_layout,omitempty"`
+	Tags          map[string]string `json:"tags,omitempty"`
 }
 
 func Run(ctx context.Context, ffprobePath, inputURL string) (Result, error) {

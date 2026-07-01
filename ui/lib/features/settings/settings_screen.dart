@@ -2,14 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../app/app_routes.dart';
-import '../../app/session_cubit.dart';
-import '../../core/api/api_client.dart';
-import '../../core/api/models.dart';
-import '../../core/state/load_status.dart';
-import '../../core/widgets/neo_button.dart';
-import '../../core/widgets/neo_panel.dart';
-import '../../core/widgets/neo_state.dart';
+import 'package:neotranscoder_ui/app/app_routes.dart';
+import 'package:neotranscoder_ui/app/session_cubit.dart';
+import 'package:neotranscoder_ui/core/api/api_client.dart';
+import 'package:neotranscoder_ui/core/api/models.dart';
+import 'package:neotranscoder_ui/core/state/load_status.dart';
+import 'package:neotranscoder_ui/core/widgets/neo_button.dart';
+import 'package:neotranscoder_ui/core/widgets/neo_panel.dart';
+import 'package:neotranscoder_ui/core/widgets/neo_state.dart';
 import 'settings_cubit.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -46,7 +46,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 child: Row(
                   children: <Widget>[
                     const Expanded(
-                      child: Text('The default admin password must be changed before using the system.'),
+                      child: Text(
+                          'The default admin password must be changed before using the system.'),
                     ),
                     NeoButton(
                       label: 'Change password',
@@ -59,16 +60,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ],
             const SizedBox(height: 18),
-            NeoPanel(
+            const NeoPanel(
               title: 'Runtime',
               child: Wrap(
                 spacing: 18,
                 runSpacing: 12,
-                children: const <Widget>[
-                  _SettingValue(label: 'Config', value: '/etc/neotranscoder/config.json'),
-                  _SettingValue(label: 'State', value: '/var/lib/neotranscoder/state.json'),
-                  _SettingValue(label: 'Logs', value: 'journald + in-memory recent logs'),
-                  _SettingValue(label: 'Service', value: 'neotranscoder.service'),
+                children: <Widget>[
+                  _SettingValue(
+                      label: 'Config', value: '/etc/neotranscoder/config.json'),
+                  _SettingValue(
+                      label: 'State',
+                      value: '/var/lib/neotranscoder/state.json'),
+                  _SettingValue(
+                      label: 'Logs', value: 'journald + in-memory recent logs'),
+                  _SettingValue(
+                      label: 'Service', value: 'neotranscoder.service'),
                 ],
               ),
             ),
@@ -90,11 +96,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _usersContent(SettingsState state) {
-    if (state.status == LoadStatus.loading || state.status == LoadStatus.initial) {
+    if (state.status == LoadStatus.loading ||
+        state.status == LoadStatus.initial) {
       return const NeoLoadingState(label: 'Loading users');
     }
     if (state.status == LoadStatus.failure) {
-      return NeoErrorState(message: state.error, onRetry: context.read<SettingsCubit>().load);
+      return NeoErrorState(
+          message: state.error, onRetry: context.read<SettingsCubit>().load);
     }
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
@@ -129,7 +137,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               NeoButton(
                 label: 'Delete',
                 icon: Icons.delete_outline,
-                onPressed: user.username == 'admin' ? null : () => _confirmDelete(user),
+                onPressed: user.username == 'admin'
+                    ? null
+                    : () => _confirmDelete(user),
               ),
             ],
           ),
@@ -146,7 +156,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (value == null || !mounted) {
       return;
     }
-    final bool changed = await _action((SettingsCubit cubit) => cubit.changePassword(value.currentPassword, value.newPassword));
+    final bool changed = await _action((SettingsCubit cubit) =>
+        cubit.changePassword(value.currentPassword, value.newPassword));
     if (!mounted) {
       return;
     }
@@ -159,7 +170,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _openCreateUserDialog() async {
     final _UserPassword? value = await showDialog<_UserPassword>(
       context: context,
-      builder: (BuildContext context) => const _UserPasswordDialog(title: 'New user'),
+      builder: (BuildContext context) =>
+          const _UserPasswordDialog(title: 'New user'),
     );
     if (value == null) {
       return;
@@ -167,7 +179,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted) {
       return;
     }
-    await _action((SettingsCubit cubit) => cubit.createUser(value.username, value.password));
+    await _action((SettingsCubit cubit) =>
+        cubit.createUser(value.username, value.password));
   }
 
   Future<void> _openUserPasswordDialog(UserAccount user) async {
@@ -184,7 +197,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted) {
       return;
     }
-    await _action((SettingsCubit cubit) => cubit.changeUserPassword(value.username, value.password));
+    await _action((SettingsCubit cubit) =>
+        cubit.changeUserPassword(value.username, value.password));
   }
 
   Future<void> _confirmDelete(UserAccount user) async {
@@ -224,7 +238,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 }
 
 class _OwnPasswordDialog extends StatefulWidget {
-  const _OwnPasswordDialog({super.key});
+  const _OwnPasswordDialog();
 
   @override
   State<_OwnPasswordDialog> createState() => _OwnPasswordDialogState();
@@ -284,7 +298,6 @@ class _UserPasswordDialog extends StatefulWidget {
   const _UserPasswordDialog({
     required this.title,
     this.username = '',
-    super.key,
   });
 
   final String title;
@@ -358,7 +371,8 @@ class _UserPasswordDialogState extends State<_UserPasswordDialog> {
     if (!(_formKey.currentState?.validate() ?? false)) {
       return;
     }
-    Navigator.of(context).pop(_UserPassword(_username.text.trim(), _password.text));
+    Navigator.of(context)
+        .pop(_UserPassword(_username.text.trim(), _password.text));
   }
 }
 
@@ -366,7 +380,6 @@ class _PasswordField extends StatelessWidget {
   const _PasswordField({
     required this.controller,
     required this.label,
-    super.key,
   });
 
   final TextEditingController controller;
@@ -395,7 +408,6 @@ class _SettingValue extends StatelessWidget {
   const _SettingValue({
     required this.label,
     required this.value,
-    super.key,
   });
 
   final String label;

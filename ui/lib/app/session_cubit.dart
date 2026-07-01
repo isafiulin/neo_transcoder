@@ -1,8 +1,8 @@
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../core/api/api_client.dart';
-import '../core/api/models.dart';
+import 'package:neotranscoder_ui/core/api/api_client.dart';
+import 'package:neotranscoder_ui/core/api/models.dart';
 
 enum SessionStatus {
   checking,
@@ -19,7 +19,8 @@ class SessionState extends Equatable {
 
   const SessionState.checking() : this(status: SessionStatus.checking);
 
-  const SessionState.unauthenticated() : this(status: SessionStatus.unauthenticated);
+  const SessionState.unauthenticated()
+      : this(status: SessionStatus.unauthenticated);
 
   final SessionStatus status;
   final UserAccount? user;
@@ -51,7 +52,8 @@ class SessionCubit extends Cubit<SessionState> {
         SessionState(
           status: SessionStatus.authenticated,
           user: user,
-          mustChangePassword: user.mustChangePassword || AuthStore.mustChangePassword,
+          mustChangePassword:
+              user.mustChangePassword || AuthStore.mustChangePassword,
         ),
       );
     } on Object {

@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../app/app_routes.dart';
-import '../../app/session_cubit.dart';
-import '../../app/theme.dart';
-import '../../core/api/api_client.dart';
+import 'package:neotranscoder_ui/app/app_routes.dart';
+import 'package:neotranscoder_ui/app/session_cubit.dart';
+import 'package:neotranscoder_ui/app/theme.dart';
+import 'package:neotranscoder_ui/core/api/api_client.dart';
+import 'package:neotranscoder_ui/core/api/models.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -46,9 +47,11 @@ class _LoginScreenState extends State<LoginScreen> {
                     fit: BoxFit.contain,
                   ),
                   const SizedBox(height: 24),
-                  Text('NeoTranscoder', style: Theme.of(context).textTheme.titleLarge),
+                  Text('NeoTranscoder',
+                      style: Theme.of(context).textTheme.titleLarge),
                   const SizedBox(height: 8),
-                  Text('Sign in to management console', style: Theme.of(context).textTheme.labelMedium),
+                  Text('Sign in to management console',
+                      style: Theme.of(context).textTheme.labelMedium),
                   const SizedBox(height: 18),
                   TextField(
                     controller: _username,
@@ -70,7 +73,8 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   if (_error.isNotEmpty) ...<Widget>[
                     const SizedBox(height: 12),
-                    Text(_error, style: const TextStyle(color: NeoColors.danger)),
+                    Text(_error,
+                        style: const TextStyle(color: NeoColors.danger)),
                   ],
                   const SizedBox(height: 18),
                   ElevatedButton.icon(
@@ -104,12 +108,16 @@ class _LoginScreenState extends State<LoginScreen> {
       _error = '';
     });
     try {
-      final AuthSession session = await context.read<SessionCubit>().login(username, password);
+      final AuthSession session =
+          await context.read<SessionCubit>().login(username, password);
       if (!mounted) {
         return;
       }
-      final String from = GoRouterState.of(context).uri.queryParameters['from'] ?? AppRoutes.dashboard;
-      context.go(session.mustChangePassword ? AppRoutes.settings : _safeFrom(from));
+      final String from =
+          GoRouterState.of(context).uri.queryParameters['from'] ??
+              AppRoutes.dashboard;
+      context.go(
+          session.mustChangePassword ? AppRoutes.settings : _safeFrom(from));
     } on Object catch (error) {
       if (!mounted) {
         return;
@@ -123,7 +131,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
   String _safeFrom(String from) {
     final Uri uri = Uri.parse(from);
-    if (!from.startsWith('/') || uri.path == AppRoutes.splash || uri.path == AppRoutes.login) {
+    if (!from.startsWith('/') ||
+        uri.path == AppRoutes.splash ||
+        uri.path == AppRoutes.login) {
       return AppRoutes.dashboard;
     }
     return from;

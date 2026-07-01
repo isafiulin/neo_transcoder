@@ -1,10 +1,10 @@
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../../core/api/api_client.dart';
-import '../../core/api/models.dart';
-import '../../core/state/load_status.dart';
-import '../../data/repositories/transcoder_repository.dart';
+import 'package:neotranscoder_ui/core/api/api_client.dart';
+import 'package:neotranscoder_ui/core/api/models.dart';
+import 'package:neotranscoder_ui/core/state/load_status.dart';
+import 'package:neotranscoder_ui/data/repositories/transcoder_repository.dart';
 
 class SettingsState extends Equatable {
   const SettingsState({
@@ -46,7 +46,8 @@ class SettingsCubit extends Cubit<SettingsState> {
       final List<UserAccount> users = await _repository.users();
       emit(state.copyWith(status: LoadStatus.ready, users: users));
     } on Object catch (error) {
-      emit(state.copyWith(status: LoadStatus.failure, error: apiErrorMessage(error)));
+      emit(state.copyWith(
+          status: LoadStatus.failure, error: apiErrorMessage(error)));
     }
   }
 

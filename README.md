@@ -352,11 +352,13 @@ A release bundle contains:
 
 ```text
 neotranscoder
+neotranscoder.sha256
 install.sh
+update.sh
 uninstall.sh
 ```
 
-Install or update:
+Install:
 
 ```sh
 sudo ./install.sh
@@ -372,13 +374,72 @@ The installer:
 - installs `neotranscoder.service`;
 - enables and starts the service.
 
+The installer and service manager only operate on NeoTranscoder-owned paths:
+
+```text
+/usr/local/bin/neotranscoder
+/usr/local/lib/neotranscoder
+/etc/neotranscoder
+/var/lib/neotranscoder
+/var/log/neotranscoder
+/etc/systemd/system/neotranscoder.service
+```
+
+No other services, system utilities, FFmpeg binaries, or network settings are
+modified.
+
+Update from an unpacked release bundle:
+
+```sh
+sudo neotranscoder update --bundle ./neotranscoder-release
+```
+
+If the installed version is too old to have the `update` command, run the
+updater from the new bundle:
+
+```sh
+cd ./neotranscoder-release
+sudo ./update.sh --bundle .
+```
+
+Bundle updates replace the binary and refresh the installed helper scripts:
+`install.sh`, `update.sh`, and `uninstall.sh`.
+
+Update from a local binary:
+
+```sh
+sudo neotranscoder update --file ./neotranscoder
+```
+
+Update from a URL:
+
+```sh
+sudo neotranscoder update --url https://example.com/releases/neotranscoder-linux-amd64
+```
+
+For file and URL updates, checksum verification is optional but recommended:
+
+```sh
+sudo neotranscoder update \
+  --url https://example.com/releases/neotranscoder-linux-amd64 \
+  --sha256 0123456789abcdef...
+```
+
+The updater downloads or copies the new binary to a temporary file, optionally
+verifies its SHA-256 checksum, verifies that it can run `neotranscoder version`,
+stores a backup in `/var/lib/neotranscoder/backups`, atomically replaces
+`/usr/local/bin/neotranscoder`, and restarts only `neotranscoder.service`. If the
+service restart fails, the previous binary is restored and the service is
+started again.
+
 Remove the program and service while keeping config, state, and logs:
 
 ```sh
 sudo neotranscoder uninstall
 ```
 
-Fully remove the program, service, config, state, logs, and system user:
+Fully remove the program, service, config, state, logs, backups, and system
+user:
 
 ```sh
 sudo neotranscoder uninstall --purge
@@ -786,6 +847,23 @@ Build a local release bundle:
 ```sh
 VERSION=0.1.0 ./scripts/build-release.sh
 ```
+
+Release builds embed version metadata with Go linker flags. A production build
+should set at least `VERSION`; `COMMIT` and `DATE` default to the current git
+commit and current UTC time:
+
+```sh
+VERSION=0.1.0 COMMIT="$(git rev-parse --short HEAD)" ./scripts/build-release.sh
+```
+
+Check a built binary:
+
+```sh
+dist/neotranscoder/neotranscoder version
+```
+
+If `sha256sum` or `shasum` is available on the build machine, the release bundle
+also includes `neotranscoder.sha256` for verified URL or file updates.
 
 The generated bundle is written to:
 

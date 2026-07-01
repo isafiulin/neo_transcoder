@@ -31,7 +31,6 @@ class NeoTheme {
   static ThemeData light() {
     final scheme = ColorScheme.fromSeed(
       seedColor: NeoColors.blue,
-      brightness: Brightness.light,
       primary: NeoColors.blue,
       surface: NeoColors.surface,
     );

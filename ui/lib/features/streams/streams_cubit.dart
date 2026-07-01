@@ -1,10 +1,12 @@
+import 'dart:async';
+
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../../core/api/api_client.dart';
-import '../../core/api/models.dart';
-import '../../core/state/load_status.dart';
-import '../../data/repositories/transcoder_repository.dart';
+import 'package:neotranscoder_ui/core/api/api_client.dart';
+import 'package:neotranscoder_ui/core/api/models.dart';
+import 'package:neotranscoder_ui/core/state/load_status.dart';
+import 'package:neotranscoder_ui/data/repositories/transcoder_repository.dart';
 
 class StreamsState extends Equatable {
   const StreamsState({
@@ -59,15 +61,44 @@ class StreamsCubit extends Cubit<StreamsState> {
         super(const StreamsState());
 
   final TranscoderRepository _repository;
+  StreamSubscription<ApiEvent>? _events;
+  bool _loading = false;
+  bool _reloadQueued = false;
 
   Future<void> load() async {
-    emit(state.copyWith(status: LoadStatus.loading, error: ''));
+    if (isClosed) {
+      return;
+    }
+    if (_loading) {
+      _reloadQueued = true;
+      return;
+    }
+    _loading = true;
+    final LoadStatus status =
+        state.status == LoadStatus.initial || state.status == LoadStatus.failure
+            ? LoadStatus.loading
+            : state.status;
+    emit(state.copyWith(status: status, error: ''));
     try {
       final List<StreamView> streams = await _repository.streams();
       final List<Profile> profiles = await _repository.profiles();
-      emit(state.copyWith(status: LoadStatus.ready, streams: streams, profiles: profiles));
+      if (isClosed) {
+        return;
+      }
+      emit(state.copyWith(
+          status: LoadStatus.ready, streams: streams, profiles: profiles));
     } on Object catch (error) {
-      emit(state.copyWith(status: LoadStatus.failure, error: apiErrorMessage(error)));
+      if (isClosed) {
+        return;
+      }
+      emit(state.copyWith(
+          status: LoadStatus.failure, error: apiErrorMessage(error)));
+    } finally {
+      _loading = false;
+      if (_reloadQueued && !isClosed) {
+        _reloadQueued = false;
+        unawaited(load());
+      }
     }
   }
 
@@ -111,4 +142,26 @@ class StreamsCubit extends Cubit<StreamsState> {
   Future<ProbeResult> probe(String inputUrl) {
     return _repository.probe(inputUrl);
   }
+
+  void subscribe() {
+    _events ??= _repository.events().listen((ApiEvent event) {
+      if (_refreshEvents.contains(event.type)) {
+        load();
+      }
+    });
+  }
+
+  @override
+  Future<void> close() async {
+    await _events?.cancel();
+    return super.close();
+  }
 }
+
+const Set<String> _refreshEvents = <String>{
+  'stream_saved',
+  'stream_deleted',
+  'stream_state',
+  'profile_saved',
+  'profile_deleted',
+};

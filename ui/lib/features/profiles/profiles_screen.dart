@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../../core/api/api_client.dart';
-import '../../core/api/models.dart';
-import '../../core/state/load_status.dart';
-import '../../core/widgets/neo_button.dart';
-import '../../core/widgets/neo_panel.dart';
-import '../../core/widgets/neo_search_field.dart';
-import '../../core/widgets/neo_state.dart';
+import 'package:neotranscoder_ui/core/api/api_client.dart';
+import 'package:neotranscoder_ui/core/api/models.dart';
+import 'package:neotranscoder_ui/core/state/load_status.dart';
+import 'package:neotranscoder_ui/core/widgets/neo_button.dart';
+import 'package:neotranscoder_ui/core/widgets/neo_panel.dart';
+import 'package:neotranscoder_ui/core/widgets/neo_search_field.dart';
+import 'package:neotranscoder_ui/core/widgets/neo_state.dart';
 import 'profiles_cubit.dart';
 
 class ProfilesScreen extends StatefulWidget {
@@ -63,11 +63,13 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
 
   Widget _content(ProfilesState state, List<Profile> profiles) {
     final String? error = state.error.isEmpty ? null : state.error;
-    if (state.status == LoadStatus.loading || state.status == LoadStatus.initial) {
+    if (state.status == LoadStatus.loading ||
+        state.status == LoadStatus.initial) {
       return const NeoLoadingState(label: 'Loading profiles');
     }
     if (error != null) {
-      return NeoErrorState(message: error, onRetry: context.read<ProfilesCubit>().load);
+      return NeoErrorState(
+          message: error, onRetry: context.read<ProfilesCubit>().load);
     }
     if (profiles.isEmpty) {
       return const NeoEmptyState(
@@ -93,18 +95,32 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
   }
 
   DataRow _row(Profile profile) {
+    final String templateVideoBitrate =
+        profile.templateDefaults['video_bitrate'] ?? '';
+    final String templateAudioBitrate =
+        profile.templateDefaults['audio_bitrate'] ?? '';
+    final String bitrate = profile.templateArgs.isEmpty
+        ? _dash(profile.videoBitrate)
+        : _dash(templateVideoBitrate);
+    final String audio = profile.templateArgs.isEmpty
+        ? profile.audioCodec
+        : _dash(templateAudioBitrate);
     return DataRow(
       cells: <DataCell>[
         DataCell(Text(profile.name)),
-        DataCell(Text(profile.templateArgs.isEmpty ? profile.videoCodec : 'template')),
-        DataCell(Text(profile.templateArgs.isEmpty ? _dash(profile.videoBitrate) : _dash(profile.templateDefaults['video_bitrate'] ?? ''))),
-        DataCell(Text(profile.templateArgs.isEmpty ? profile.audioCodec : _dash(profile.templateDefaults['audio_bitrate'] ?? ''))),
-        DataCell(Text(profile.templateArgs.isEmpty ? profile.outputFormat : 'template')),
+        DataCell(Text(
+            profile.templateArgs.isEmpty ? profile.videoCodec : 'template')),
+        DataCell(Text(bitrate)),
+        DataCell(Text(audio)),
+        DataCell(Text(
+            profile.templateArgs.isEmpty ? profile.outputFormat : 'template')),
         DataCell(
           PopupMenuButton<String>(
             tooltip: 'Profile actions',
             onSelected: (String value) => _handleAction(value, profile),
-            itemBuilder: (BuildContext context) => const <PopupMenuEntry<String>>[
+            itemBuilder: (BuildContext context) =>
+                const <PopupMenuEntry<String>>[
+              PopupMenuItem<String>(value: 'preview', child: Text('Preview')),
               PopupMenuItem<String>(value: 'edit', child: Text('Edit')),
               PopupMenuItem<String>(value: 'delete', child: Text('Delete')),
             ],
@@ -116,6 +132,9 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
 
   Future<void> _handleAction(String action, Profile profile) async {
     switch (action) {
+      case 'preview':
+        await _openPreviewDialog(profile);
+        return;
       case 'edit':
         await _openProfileDialog(profile: profile);
         return;
@@ -123,6 +142,25 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
         await _confirmDelete(profile);
         return;
     }
+  }
+
+  Future<void> _openPreviewDialog(Profile profile) async {
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: Text('${profile.name} preview'),
+        content: SizedBox(
+          width: 760,
+          child: SelectableText(_profilePreview(profile)),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _openProfileDialog({Profile? profile}) async {
@@ -154,7 +192,8 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
       context: context,
       builder: (BuildContext context) => AlertDialog(
         title: const Text('Delete profile'),
-        content: Text('Delete ${profile.name}? Streams using this profile must be changed first.'),
+        content: Text(
+            'Delete ${profile.name}? Streams using this profile must be changed first.'),
         actions: <Widget>[
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -192,7 +231,6 @@ class _ProfilesScreenState extends State<ProfilesScreen> {
 class _ProfileDialog extends StatefulWidget {
   const _ProfileDialog({
     this.profile,
-    super.key,
   });
 
   final Profile? profile;
@@ -204,14 +242,18 @@ class _ProfileDialog extends StatefulWidget {
 class _ProfileDialogState extends State<_ProfileDialog> {
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final TextEditingController _name = TextEditingController();
-  final TextEditingController _videoCodec = TextEditingController(text: 'libx264');
+  final TextEditingController _videoCodec =
+      TextEditingController(text: 'libx264');
   final TextEditingController _preset = TextEditingController(text: 'veryfast');
-  final TextEditingController _tune = TextEditingController(text: 'zerolatency');
-  final TextEditingController _videoBitrate = TextEditingController(text: '4000k');
+  final TextEditingController _tune =
+      TextEditingController(text: 'zerolatency');
+  final TextEditingController _videoBitrate =
+      TextEditingController(text: '4000k');
   final TextEditingController _maxrate = TextEditingController(text: '4000k');
   final TextEditingController _bufsize = TextEditingController(text: '8000k');
   final TextEditingController _audioCodec = TextEditingController(text: 'aac');
-  final TextEditingController _audioBitrate = TextEditingController(text: '128k');
+  final TextEditingController _audioBitrate =
+      TextEditingController(text: '128k');
   final TextEditingController _format = TextEditingController(text: 'mpegts');
   final TextEditingController _templateArgs = TextEditingController();
   final TextEditingController _templateDefaults = TextEditingController();
@@ -273,14 +315,18 @@ class _ProfileDialogState extends State<_ProfileDialog> {
                   spacing: 12,
                   runSpacing: 12,
                   children: <Widget>[
-                    _Field(controller: _name, label: 'Name', enabled: widget.profile == null),
+                    _Field(
+                        controller: _name,
+                        label: 'Name',
+                        enabled: widget.profile == null),
                     SizedBox(
                       width: 260,
                       child: SwitchListTile(
                         value: _templateMode,
                         title: const Text('Template profile'),
                         contentPadding: EdgeInsets.zero,
-                        onChanged: (bool value) => setState(() => _templateMode = value),
+                        onChanged: (bool value) =>
+                            setState(() => _templateMode = value),
                       ),
                     ),
                   ],
@@ -291,19 +337,57 @@ class _ProfileDialogState extends State<_ProfileDialog> {
                     defaults: _templateDefaults,
                   )
                 else
-                  Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: <Widget>[
-                      _Field(controller: _videoCodec, label: 'Video codec'),
-                      _Field(controller: _preset, label: 'Preset'),
-                      _Field(controller: _tune, label: 'Tune'),
-                      _Field(controller: _videoBitrate, label: 'Video bitrate'),
-                      _Field(controller: _maxrate, label: 'Maxrate'),
-                      _Field(controller: _bufsize, label: 'Bufsize'),
-                      _Field(controller: _audioCodec, label: 'Audio codec'),
-                      _Field(controller: _audioBitrate, label: 'Audio bitrate'),
-                      _Field(controller: _format, label: 'Output format'),
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 12,
+                        children: <Widget>[
+                          _Field(controller: _videoCodec, label: 'Video codec'),
+                          _Field(controller: _preset, label: 'Preset'),
+                          _Field(controller: _tune, label: 'Tune'),
+                          _Field(
+                              controller: _videoBitrate,
+                              label: 'Video bitrate'),
+                          _Field(controller: _maxrate, label: 'Maxrate'),
+                          _Field(controller: _bufsize, label: 'Bufsize'),
+                          _Field(controller: _audioCodec, label: 'Audio codec'),
+                          _Field(
+                              controller: _audioBitrate,
+                              label: 'Audio bitrate'),
+                          _Field(controller: _format, label: 'Output format'),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      AnimatedBuilder(
+                        animation: Listenable.merge(<Listenable>[
+                          _videoCodec,
+                          _preset,
+                          _tune,
+                          _videoBitrate,
+                          _maxrate,
+                          _bufsize,
+                          _audioCodec,
+                          _audioBitrate,
+                          _format,
+                        ]),
+                        builder: (BuildContext context, Widget? child) {
+                          return _CommandPreview(
+                            command: _structuredPreview(
+                              videoCodec: _videoCodec.text,
+                              preset: _preset.text,
+                              tune: _tune.text,
+                              videoBitrate: _videoBitrate.text,
+                              maxrate: _maxrate.text,
+                              bufsize: _bufsize.text,
+                              audioCodec: _audioCodec.text,
+                              audioBitrate: _audioBitrate.text,
+                              format: _format.text,
+                            ),
+                          );
+                        },
+                      ),
                     ],
                   ),
               ],
@@ -363,7 +447,6 @@ class _TemplateFields extends StatelessWidget {
   const _TemplateFields({
     required this.args,
     required this.defaults,
-    super.key,
   });
 
   final TextEditingController args;
@@ -380,11 +463,17 @@ class _TemplateFields extends StatelessWidget {
           maxLines: 14,
           decoration: const InputDecoration(
             labelText: 'Template args',
-            helperText: r'One FFmpeg argument per line. Use ${i}, ${o}, and custom ${param} values.',
+            helperText:
+                r'One FFmpeg argument per line. Use ${i}, ${o}, and custom ${param} values.',
           ),
           validator: (String? value) {
-            if (_lines(value ?? '').isEmpty) {
+            final List<String> lines = _lines(value ?? '');
+            if (lines.isEmpty) {
               return 'At least one argument is required';
+            }
+            final String joined = lines.join(' ');
+            if (!joined.contains(r'${i}') || !joined.contains(r'${o}')) {
+              return r'Template must include ${i} and ${o} placeholders';
             }
             return null;
           },
@@ -396,16 +485,69 @@ class _TemplateFields extends StatelessWidget {
           maxLines: 8,
           decoration: const InputDecoration(
             labelText: 'Default parameters',
-            helperText: 'One key=value per line. Stream options can override these values.',
+            helperText:
+                'One key=value per line. Stream options can override these values.',
           ),
+          validator: (String? value) {
+            final String invalid = _invalidKeyValueLine(value ?? '');
+            if (invalid.isNotEmpty) {
+              return 'Invalid line: $invalid';
+            }
+            return null;
+          },
+        ),
+        const SizedBox(height: 12),
+        AnimatedBuilder(
+          animation: Listenable.merge(<Listenable>[args, defaults]),
+          builder: (BuildContext context, Widget? child) {
+            return _CommandPreview(
+              command: _templatePreview(
+                  _lines(args.text), _parseKeyValues(defaults.text)),
+            );
+          },
         ),
       ],
     );
   }
 }
 
+class _CommandPreview extends StatelessWidget {
+  const _CommandPreview({
+    required this.command,
+  });
+
+  final String command;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border.all(color: Theme.of(context).dividerColor),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Text('Command preview',
+                style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 8),
+            SelectableText(
+                command.isEmpty ? 'ffmpeg preview will appear here' : command),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 List<String> _lines(String value) {
-  return value.split('\n').map((String line) => line.trim()).where((String line) => line.isNotEmpty).toList();
+  return value
+      .split('\n')
+      .map((String line) => line.trim())
+      .where((String line) => line.isNotEmpty)
+      .toList();
 }
 
 Map<String, String> _parseKeyValues(String value) {
@@ -420,6 +562,16 @@ Map<String, String> _parseKeyValues(String value) {
   return out;
 }
 
+String _invalidKeyValueLine(String value) {
+  for (final String line in _lines(value)) {
+    final int index = line.indexOf('=');
+    if (index <= 0 || line.substring(0, index).trim().isEmpty) {
+      return line;
+    }
+  }
+  return '';
+}
+
 String _encodeKeyValues(Map<String, String> values) {
   final List<String> keys = values.keys.toList()..sort();
   return keys.map((String key) => '$key=${values[key]}').join('\n');
@@ -429,12 +581,75 @@ String _dash(String value) {
   return value.isEmpty ? '-' : value;
 }
 
+String _profilePreview(Profile profile) {
+  if (profile.templateArgs.isNotEmpty) {
+    return _templatePreview(profile.templateArgs, profile.templateDefaults);
+  }
+  return _structuredPreview(
+    videoCodec: profile.videoCodec,
+    preset: profile.videoPreset,
+    tune: profile.videoTune,
+    videoBitrate: profile.videoBitrate,
+    maxrate: profile.videoMaxrate,
+    bufsize: profile.videoBufsize,
+    audioCodec: profile.audioCodec,
+    audioBitrate: profile.audioBitrate,
+    format: profile.outputFormat,
+  );
+}
+
+String _structuredPreview({
+  required String videoCodec,
+  required String preset,
+  required String tune,
+  required String videoBitrate,
+  required String maxrate,
+  required String bufsize,
+  required String audioCodec,
+  required String audioBitrate,
+  required String format,
+}) {
+  return <String>[
+    'ffmpeg',
+    '-hide_banner',
+    r'-i ${i}',
+    '-map 0:v:0',
+    '-map 0:a:0?',
+    '-c:v ${videoCodec.trim()}',
+    if (preset.trim().isNotEmpty) '-preset ${preset.trim()}',
+    if (tune.trim().isNotEmpty) '-tune ${tune.trim()}',
+    if (videoBitrate.trim().isNotEmpty) '-b:v ${videoBitrate.trim()}',
+    if (maxrate.trim().isNotEmpty) '-maxrate ${maxrate.trim()}',
+    if (bufsize.trim().isNotEmpty) '-bufsize ${bufsize.trim()}',
+    '-c:a ${audioCodec.trim()}',
+    if (audioBitrate.trim().isNotEmpty) '-b:a ${audioBitrate.trim()}',
+    '-f ${format.trim()}',
+    r'${o}',
+  ].join(' ');
+}
+
+String _templatePreview(List<String> args, Map<String, String> defaults) {
+  final Map<String, String> values = <String, String>{
+    'i': 'udp://239.1.1.1:1234',
+    'o': 'udp://239.1.1.2:1234?pkt_size=1316',
+    ...defaults,
+  };
+  String resolve(String arg) {
+    String out = arg;
+    values.forEach((String key, String value) {
+      out = out.replaceAll(r'${' '$key}', value);
+    });
+    return out;
+  }
+
+  return <String>['ffmpeg', ...args.map(resolve)].join(' ');
+}
+
 class _Field extends StatelessWidget {
   const _Field({
     required this.controller,
     required this.label,
     this.enabled = true,
-    super.key,
   });
 
   final TextEditingController controller;

@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 
-import '../core/api/api_client.dart';
-import '../data/repositories/transcoder_repository.dart';
+import 'package:neotranscoder_ui/core/api/api_client.dart';
+import 'package:neotranscoder_ui/data/repositories/transcoder_repository.dart';
 import 'router.dart';
 import 'session_cubit.dart';
 import 'theme.dart';

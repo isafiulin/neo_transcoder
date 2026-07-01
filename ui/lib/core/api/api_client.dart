@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:html' as html;
+import 'dart:js_interop';
 
 import 'package:dio/dio.dart';
+import 'package:web/web.dart' as web;
 
 import 'models.dart';
 
@@ -32,7 +33,8 @@ class ApiClient {
           if (await _refreshAndRetry(error, handler)) {
             return;
           }
-          if (error.response?.statusCode == 401 && !error.requestOptions.path.startsWith('/auth/')) {
+          if (error.response?.statusCode == 401 &&
+              !error.requestOptions.path.startsWith('/auth/')) {
             AuthStore.clear();
             onUnauthorized?.call();
           }
@@ -45,7 +47,8 @@ class ApiClient {
   final Dio _dio;
   void Function()? onUnauthorized;
 
-  Future<bool> _refreshAndRetry(DioException error, ErrorInterceptorHandler handler) async {
+  Future<bool> _refreshAndRetry(
+      DioException error, ErrorInterceptorHandler handler) async {
     if (error.response?.statusCode != 401 ||
         error.requestOptions.extra['retried'] == true ||
         error.requestOptions.path.startsWith('/auth/')) {
@@ -57,11 +60,13 @@ class ApiClient {
     }
     try {
       final Dio refreshClient = Dio(BaseOptions(baseUrl: '/api'));
-      final Response<Map<String, dynamic>> response = await refreshClient.post<Map<String, dynamic>>(
+      final Response<Map<String, dynamic>> response =
+          await refreshClient.post<Map<String, dynamic>>(
         '/auth/refresh',
         data: <String, Object?>{'refresh_token': refreshToken},
       );
-      final AuthSession session = AuthSession.fromJson(response.data ?? <String, dynamic>{});
+      final AuthSession session =
+          AuthSession.fromJson(response.data ?? <String, dynamic>{});
       AuthStore.save(session);
       final RequestOptions request = error.requestOptions;
       request.extra['retried'] = true;
@@ -86,24 +91,29 @@ class ApiClient {
 
   Future<AuthSession> login(String username, String password) async {
     AuthStore.clear();
-    final Response<Map<String, dynamic>> response = await _dio.post<Map<String, dynamic>>(
+    final Response<Map<String, dynamic>> response =
+        await _dio.post<Map<String, dynamic>>(
       '/auth/login',
       data: <String, Object?>{
         'username': username,
         'password': password,
       },
     );
-    final AuthSession session = AuthSession.fromJson(response.data ?? <String, dynamic>{});
+    final AuthSession session =
+        AuthSession.fromJson(response.data ?? <String, dynamic>{});
     AuthStore.save(session);
     return session;
   }
 
   Future<UserAccount> verify() async {
-    final Response<Map<String, dynamic>> response = await _dio.get<Map<String, dynamic>>('/auth/verify');
-    return UserAccount.fromJson(response.data?['user'] as Map<String, dynamic>? ?? <String, dynamic>{});
+    final Response<Map<String, dynamic>> response =
+        await _dio.get<Map<String, dynamic>>('/auth/verify');
+    return UserAccount.fromJson(
+        response.data?['user'] as Map<String, dynamic>? ?? <String, dynamic>{});
   }
 
-  Future<void> changePassword(String currentPassword, String newPassword) async {
+  Future<void> changePassword(
+      String currentPassword, String newPassword) async {
     await _dio.post<void>(
       '/auth/change-password',
       data: <String, Object?>{
@@ -115,9 +125,11 @@ class ApiClient {
   }
 
   Future<List<UserAccount>> users() async {
-    final Response<List<dynamic>> response = await _dio.get<List<dynamic>>('/users');
+    final Response<List<dynamic>> response =
+        await _dio.get<List<dynamic>>('/users');
     return (response.data ?? <dynamic>[])
-        .map((dynamic item) => UserAccount.fromJson(item as Map<String, dynamic>))
+        .map((dynamic item) =>
+            UserAccount.fromJson(item as Map<String, dynamic>))
         .toList();
   }
 
@@ -181,7 +193,8 @@ class ApiClient {
   }
 
   Future<ProbeResult> probe(String inputUrl) async {
-    final Response<Map<String, dynamic>> response = await _dio.post<Map<String, dynamic>>(
+    final Response<Map<String, dynamic>> response =
+        await _dio.post<Map<String, dynamic>>(
       '/probe',
       data: <String, Object?>{'input_url': inputUrl},
     );
@@ -228,16 +241,18 @@ class ApiClient {
   Stream<ApiEvent> events() {
     final controller = StreamController<ApiEvent>.broadcast();
     final String token = Uri.encodeQueryComponent(AuthStore.accessToken ?? '');
-    final source = html.EventSource('/api/events?access_token=$token');
+    final source = web.EventSource('/api/events?access_token=$token');
+    final List<web.EventListener> listeners = <web.EventListener>[];
 
-    void handleEvent(html.Event event) {
-      final html.MessageEvent message = event as html.MessageEvent;
-      if (message.data == null) {
+    void handleEvent(web.Event event) {
+      final web.MessageEvent message = event as web.MessageEvent;
+      final JSAny? data = message.data;
+      if (data == null) {
         return;
       }
       controller.add(
         ApiEvent.fromJson(
-          jsonDecode(message.data as String) as Map<String, dynamic>,
+          jsonDecode((data as JSString).toDart) as Map<String, dynamic>,
         ),
       );
     }
@@ -251,13 +266,19 @@ class ApiClient {
       'profile_deleted',
     ];
     for (final String type in eventTypes) {
-      source.addEventListener(type, handleEvent);
+      final web.EventListener listener = handleEvent.toJS;
+      listeners.add(listener);
+      source.addEventListener(type, listener);
     }
-    final StreamSubscription<html.Event> errorSubscription = source.onError.listen((html.Event _) {
+    final web.EventListener errorListener = ((web.Event _) {
       controller.add(const ApiEvent(type: 'connection_error'));
-    });
+    }).toJS;
+    source.addEventListener('error', errorListener);
     controller.onCancel = () async {
-      await errorSubscription.cancel();
+      for (int index = 0; index < eventTypes.length; index++) {
+        source.removeEventListener(eventTypes[index], listeners[index]);
+      }
+      source.removeEventListener('error', errorListener);
       source.close();
     };
     return controller.stream;
@@ -267,15 +288,16 @@ class ApiClient {
 class AuthStore {
   static const String _accessKey = 'neotranscoder.auth.access_token';
   static const String _refreshKey = 'neotranscoder.auth.refresh_token';
-  static const String _mustChangeKey = 'neotranscoder.auth.must_change_password';
+  static const String _mustChangeKey =
+      'neotranscoder.auth.must_change_password';
   static const String _usernameKey = 'neotranscoder.auth.username';
 
   static String? get accessToken {
-    return html.window.localStorage[_accessKey];
+    return web.window.localStorage.getItem(_accessKey);
   }
 
   static String? get refreshToken {
-    return html.window.localStorage[_refreshKey];
+    return web.window.localStorage.getItem(_refreshKey);
   }
 
   static bool get isAuthenticated {
@@ -284,25 +306,26 @@ class AuthStore {
   }
 
   static bool get mustChangePassword {
-    return html.window.localStorage[_mustChangeKey] == 'true';
+    return web.window.localStorage.getItem(_mustChangeKey) == 'true';
   }
 
   static String get username {
-    return html.window.localStorage[_usernameKey] ?? '';
+    return web.window.localStorage.getItem(_usernameKey) ?? '';
   }
 
   static void save(AuthSession session) {
-    html.window.localStorage[_accessKey] = session.accessToken;
-    html.window.localStorage[_refreshKey] = session.refreshToken;
-    html.window.localStorage[_mustChangeKey] = session.mustChangePassword ? 'true' : 'false';
-    html.window.localStorage[_usernameKey] = session.user.username;
+    web.window.localStorage.setItem(_accessKey, session.accessToken);
+    web.window.localStorage.setItem(_refreshKey, session.refreshToken);
+    web.window.localStorage
+        .setItem(_mustChangeKey, session.mustChangePassword ? 'true' : 'false');
+    web.window.localStorage.setItem(_usernameKey, session.user.username);
   }
 
   static void clear() {
-    html.window.localStorage.remove(_accessKey);
-    html.window.localStorage.remove(_refreshKey);
-    html.window.localStorage.remove(_mustChangeKey);
-    html.window.localStorage.remove(_usernameKey);
+    web.window.localStorage.removeItem(_accessKey);
+    web.window.localStorage.removeItem(_refreshKey);
+    web.window.localStorage.removeItem(_mustChangeKey);
+    web.window.localStorage.removeItem(_usernameKey);
   }
 }
 
@@ -339,6 +362,7 @@ String _messageFromDio(DioException error) {
     case DioExceptionType.connectionTimeout:
     case DioExceptionType.receiveTimeout:
     case DioExceptionType.sendTimeout:
+    case DioExceptionType.transformTimeout:
       return 'Request timed out';
     case DioExceptionType.connectionError:
       return 'Cannot connect to NeoTranscoder API';

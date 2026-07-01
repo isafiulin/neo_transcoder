@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-import '../../app/theme.dart';
-import '../design_system/status.dart';
+import 'package:neotranscoder_ui/app/theme.dart';
+import 'package:neotranscoder_ui/core/design_system/status.dart';
 
 class NeoBadge extends StatelessWidget {
   const NeoBadge({
@@ -18,8 +18,8 @@ class NeoBadge extends StatelessWidget {
     final Color color = statusColor(tone);
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: color.withOpacity(0.10),
-        border: Border.all(color: color.withOpacity(0.28)),
+        color: color.withValues(alpha: 0.10),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
         borderRadius: BorderRadius.circular(NeoRadius.sm),
       ),
       child: Padding(

@@ -1,10 +1,12 @@
+import 'dart:async';
+
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../../core/api/api_client.dart';
-import '../../core/api/models.dart';
-import '../../core/state/load_status.dart';
-import '../../data/repositories/transcoder_repository.dart';
+import 'package:neotranscoder_ui/core/api/api_client.dart';
+import 'package:neotranscoder_ui/core/api/models.dart';
+import 'package:neotranscoder_ui/core/state/load_status.dart';
+import 'package:neotranscoder_ui/data/repositories/transcoder_repository.dart';
 
 class LogsState extends Equatable {
   const LogsState({
@@ -55,18 +57,72 @@ class LogsCubit extends Cubit<LogsState> {
         super(const LogsState());
 
   final TranscoderRepository _repository;
+  StreamSubscription<ApiEvent>? _events;
+  Timer? _refreshThrottle;
+  bool _loading = false;
+  bool _reloadQueued = false;
 
   Future<void> load() async {
-    emit(state.copyWith(status: LoadStatus.loading, error: ''));
+    if (isClosed) {
+      return;
+    }
+    if (_loading) {
+      _reloadQueued = true;
+      return;
+    }
+    _loading = true;
+    final LoadStatus status =
+        state.status == LoadStatus.initial || state.status == LoadStatus.failure
+            ? LoadStatus.loading
+            : state.status;
+    emit(state.copyWith(status: status, error: ''));
     try {
       final List<LogEntry> logs = await _repository.logs();
+      if (isClosed) {
+        return;
+      }
       emit(state.copyWith(status: LoadStatus.ready, logs: logs));
     } on Object catch (error) {
-      emit(state.copyWith(status: LoadStatus.failure, error: apiErrorMessage(error)));
+      if (isClosed) {
+        return;
+      }
+      emit(state.copyWith(
+          status: LoadStatus.failure, error: apiErrorMessage(error)));
+    } finally {
+      _loading = false;
+      if (_reloadQueued && !isClosed) {
+        _reloadQueued = false;
+        unawaited(load());
+      }
     }
   }
 
   void setQuery(String value) {
     emit(state.copyWith(query: value));
+  }
+
+  void subscribe() {
+    _events ??= _repository.events().listen((ApiEvent event) {
+      if (event.type == 'stream_log') {
+        _scheduleRefresh();
+      }
+    });
+  }
+
+  void _scheduleRefresh() {
+    if (_refreshThrottle != null || isClosed) {
+      return;
+    }
+    _refreshThrottle = Timer(const Duration(milliseconds: 500), () {
+      _refreshThrottle = null;
+      unawaited(load());
+    });
+  }
+
+  @override
+  Future<void> close() async {
+    _refreshThrottle?.cancel();
+    await _events?.cancel();
+    return super.close();
   }
 }
