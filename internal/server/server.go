@@ -19,6 +19,7 @@ import (
 	"neotranscoder/internal/ffmpeg"
 	"neotranscoder/internal/probe"
 	"neotranscoder/internal/streams"
+	"neotranscoder/internal/sysinfo"
 )
 
 //go:embed static/*
@@ -33,6 +34,7 @@ type Server struct {
 	log   *slog.Logger
 	store *streams.Store
 	jobs  *streams.JobManager
+	sys   *sysinfo.Collector
 }
 
 func New(cfg config.Config, log *slog.Logger) (*Server, error) {
@@ -44,7 +46,8 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		cfg:   cfg,
 		log:   log,
 		store: store,
-		jobs:  streams.NewJobManager(cfg.FFmpeg.Path, store, log),
+		jobs:  streams.NewJobManager(cfg.FFmpeg.Path, systemConfigFrom(cfg.FFmpeg), store, log),
+		sys:   sysinfo.NewCollector(""),
 	}, nil
 }
 
@@ -59,7 +62,9 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /api/doctor", s.doctor)
 	mux.HandleFunc("GET /api/events", s.events)
 	mux.HandleFunc("GET /api/metrics", s.metrics)
+	mux.HandleFunc("GET /api/system", s.system)
 	mux.HandleFunc("GET /api/logs", s.logs)
+	mux.HandleFunc("DELETE /api/logs", s.clearLogs)
 	mux.HandleFunc("GET /api/users", s.listUsers)
 	mux.HandleFunc("POST /api/users", s.createUser)
 	mux.HandleFunc("PUT /api/users/{username}/password", s.changeUserPassword)
@@ -80,6 +85,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/streams/{id}/restart", s.restartStream)
 	mux.HandleFunc("GET /api/streams/{id}/ffmpeg-command", s.ffmpegCommand)
 	mux.HandleFunc("GET /api/streams/{id}/logs", s.streamLogs)
+	mux.HandleFunc("DELETE /api/streams/{id}/logs", s.clearStreamLogs)
 	mux.Handle("/", s.web())
 
 	handler := s.auth(mux)
@@ -88,6 +94,8 @@ func (s *Server) Run(ctx context.Context) error {
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+
+	go s.sys.Run(ctx)
 
 	go func() {
 		<-ctx.Done()
@@ -309,6 +317,8 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 		"ok":      true,
 		"service": "neotranscoder",
 		"version": buildinfo.Version,
+		"commit":  buildinfo.Commit,
+		"date":    buildinfo.Date,
 	})
 }
 
@@ -354,8 +364,17 @@ func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.store.Logs("", limit))
 }
 
+func (s *Server) clearLogs(w http.ResponseWriter, _ *http.Request) {
+	s.store.ClearLogs("")
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.store.Metrics())
+}
+
+func (s *Server) system(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.sys.Snapshot())
 }
 
 func (s *Server) probe(w http.ResponseWriter, r *http.Request) {
@@ -510,7 +529,7 @@ func (s *Server) ffmpegCommand(w http.ResponseWriter, r *http.Request) {
 			Y:       view.Config.Logo.Y,
 		},
 		Options: view.Config.Options,
-	}, profile)
+	}, profile, systemConfigFrom(s.cfg.FFmpeg))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -521,9 +540,29 @@ func (s *Server) ffmpegCommand(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func systemConfigFrom(cfg config.FFmpegConfig) ffmpeg.SystemConfig {
+	return ffmpeg.SystemConfig{
+		UDPFifoSize:        cfg.UDPFifoSize,
+		UDPBufferSize:      cfg.UDPBufferSize,
+		UDPOverrunNonfatal: cfg.UDPOverrunNonfatal,
+		UDPReuse:           cfg.UDPReuse,
+		AnalyzeDuration:    cfg.AnalyzeDuration,
+		ProbeSize:          cfg.ProbeSize,
+		Threads:            cfg.Threads,
+		PktSize:            cfg.PktSize,
+		DiscardCorrupt:     cfg.DiscardCorrupt,
+		LogLevel:           cfg.LogLevel,
+	}
+}
+
 func (s *Server) streamLogs(w http.ResponseWriter, r *http.Request) {
 	limit := queryLimit(r)
 	writeJSON(w, http.StatusOK, s.store.Logs(r.PathValue("id"), limit))
+}
+
+func (s *Server) clearStreamLogs(w http.ResponseWriter, r *http.Request) {
+	s.store.ClearLogs(r.PathValue("id"))
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) web() http.Handler {

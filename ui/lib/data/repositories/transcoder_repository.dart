@@ -10,6 +10,10 @@ class TranscoderRepository {
     return _api;
   }
 
+  Future<ServerInfo> health() {
+    return _api.health();
+  }
+
   Future<List<StreamView>> streams() {
     return _api.streams();
   }
@@ -18,12 +22,20 @@ class TranscoderRepository {
     return _api.metrics();
   }
 
+  Future<ServerStats> system() {
+    return _api.system();
+  }
+
   Future<List<Profile>> profiles() {
     return _api.profiles();
   }
 
-  Future<List<LogEntry>> logs() {
-    return _api.logs();
+  Future<List<LogEntry>> logs({String? streamId}) {
+    return _api.logs(streamId: streamId);
+  }
+
+  Future<void> clearLogs({String? streamId}) {
+    return _api.clearLogs(streamId: streamId);
   }
 
   Future<void> saveStream(Map<String, Object?> body) {

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-VERSION=${VERSION:-dev}
+VERSION=${VERSION:-$(cat VERSION 2>/dev/null || echo dev)}
 COMMIT=${COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}
 DATE=${DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
 OUT=${OUT:-dist/neotranscoder}

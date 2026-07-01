@@ -4,9 +4,12 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"neotranscoder/internal/buildinfo"
@@ -83,7 +86,8 @@ func serve(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	log, closeLog := newLogger(cfg)
+	defer closeLog()
 	srv, err := server.New(cfg, log)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -94,6 +98,45 @@ func serve(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// newLogger wires cfg.Logs.Path/Level into the daemon logger. Before this,
+// the logger was hardcoded to os.Stdout only, so logs.path in config.json was
+// validated and checked for a writable directory (doctor.go) but nothing
+// ever wrote to it — the file stayed empty forever, and journald (via
+// systemd capturing stdout) was the only real log target.
+func newLogger(cfg config.Config) (*slog.Logger, func()) {
+	writer := io.Writer(os.Stdout)
+	closer := func() {}
+
+	if cfg.Logs.Path != "" {
+		if err := os.MkdirAll(filepath.Dir(cfg.Logs.Path), 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: cannot create log directory for %s: %v\n", cfg.Logs.Path, err)
+		} else if file, err := os.OpenFile(cfg.Logs.Path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: cannot open log file %s: %v\n", cfg.Logs.Path, err)
+		} else {
+			// ponytail: keep stdout too, so `journalctl -u neotranscoder` still
+			// works under systemd; the file is the durable copy.
+			writer = io.MultiWriter(os.Stdout, file)
+			closer = func() { _ = file.Close() }
+		}
+	}
+
+	handler := slog.NewTextHandler(writer, &slog.HandlerOptions{Level: parseLevel(cfg.Logs.Level)})
+	return slog.New(handler), closer
+}
+
+func parseLevel(level string) slog.Level {
+	switch strings.ToLower(level) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 func runDoctor(args []string) int {

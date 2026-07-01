@@ -414,9 +414,6 @@ func (s *Store) AppendLogCode(streamID, level, code, message string) {
 	defer s.mu.Unlock()
 	s.logs = append(s.logs, entry)
 	s.pruneLogsLocked(entry.Time)
-	if len(s.logs) > 1000 {
-		s.logs = s.logs[len(s.logs)-1000:]
-	}
 	s.emitLocked(Event{Type: "stream_log", StreamID: streamID, Time: entry.Time, Payload: entry})
 }
 
@@ -439,6 +436,24 @@ func (s *Store) Logs(streamID string, limit int) []LogEntry {
 		out[i], out[j] = out[j], out[i]
 	}
 	return out
+}
+
+func (s *Store) ClearLogs(streamID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if streamID == "" {
+		s.logs = s.logs[:0]
+		s.emitLocked(Event{Type: "logs_cleared", Time: time.Now()})
+		return
+	}
+	out := s.logs[:0]
+	for _, entry := range s.logs {
+		if entry.StreamID != streamID {
+			out = append(out, entry)
+		}
+	}
+	s.logs = out
+	s.emitLocked(Event{Type: "logs_cleared", StreamID: streamID, Time: time.Now()})
 }
 
 func (s *Store) Subscribe(ctx context.Context) <-chan Event {
@@ -474,21 +489,39 @@ func (s *Store) emitLocked(event Event) {
 	}
 }
 
+// maxLogsPerStream bounds how many log entries a single stream may keep,
+// independent of other streams, so a noisy stream can't evict another
+// stream's logs before its own retention window (see LogRetentionSeconds)
+// even expires. Matches the max page size in Logs.
+const maxLogsPerStream = 500
+
 func (s *Store) pruneLogsLocked(now time.Time) {
 	if len(s.logs) == 0 {
 		return
 	}
-	out := s.logs[:0]
-	for _, entry := range s.logs {
-		retention := DefaultLogRetentionSeconds()
-		if cfg, ok := s.streams[entry.StreamID]; ok && cfg.LogRetentionSeconds > 0 {
-			retention = cfg.LogRetentionSeconds
+	counts := make(map[string]int, len(s.streams))
+	kept := make([]LogEntry, 0, len(s.logs))
+	for i := len(s.logs) - 1; i >= 0; i-- {
+		entry := s.logs[i]
+		if entry.StreamID != "" {
+			retention := DefaultLogRetentionSeconds()
+			if cfg, ok := s.streams[entry.StreamID]; ok && cfg.LogRetentionSeconds > 0 {
+				retention = cfg.LogRetentionSeconds
+			}
+			if now.Sub(entry.Time) > time.Duration(retention)*time.Second {
+				continue
+			}
+			if counts[entry.StreamID] >= maxLogsPerStream {
+				continue
+			}
+			counts[entry.StreamID]++
 		}
-		if entry.StreamID == "" || now.Sub(entry.Time) <= time.Duration(retention)*time.Second {
-			out = append(out, entry)
-		}
+		kept = append(kept, entry)
 	}
-	s.logs = out
+	for i, j := 0, len(kept)-1; i < j; i, j = i+1, j-1 {
+		kept[i], kept[j] = kept[j], kept[i]
+	}
+	s.logs = kept
 }
 
 type persistedState struct {

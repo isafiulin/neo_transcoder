@@ -12,12 +12,14 @@ class DashboardState extends Equatable {
   const DashboardState({
     this.status = LoadStatus.initial,
     this.streams = const <StreamView>[],
+    this.server = const ServerStats(),
     this.query = '',
     this.error = '',
   });
 
   final LoadStatus status;
   final List<StreamView> streams;
+  final ServerStats server;
   final String query;
   final String error;
 
@@ -37,19 +39,21 @@ class DashboardState extends Equatable {
   DashboardState copyWith({
     LoadStatus? status,
     List<StreamView>? streams,
+    ServerStats? server,
     String? query,
     String? error,
   }) {
     return DashboardState(
       status: status ?? this.status,
       streams: streams ?? this.streams,
+      server: server ?? this.server,
       query: query ?? this.query,
       error: error ?? this.error,
     );
   }
 
   @override
-  List<Object?> get props => <Object?>[status, streams, query, error];
+  List<Object?> get props => <Object?>[status, streams, server, query, error];
 }
 
 class DashboardCubit extends Cubit<DashboardState> {
@@ -77,11 +81,18 @@ class DashboardCubit extends Cubit<DashboardState> {
             : state.status;
     emit(state.copyWith(status: status, error: ''));
     try {
-      final List<StreamView> streams = await _repository.metrics();
+      final List<Object> results = await Future.wait(<Future<Object>>[
+        _repository.metrics(),
+        _repository.system(),
+      ]);
       if (isClosed) {
         return;
       }
-      emit(state.copyWith(status: LoadStatus.ready, streams: streams));
+      emit(state.copyWith(
+        status: LoadStatus.ready,
+        streams: results[0] as List<StreamView>,
+        server: results[1] as ServerStats,
+      ));
     } on Object catch (error) {
       if (isClosed) {
         return;

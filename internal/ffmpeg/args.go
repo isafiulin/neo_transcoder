@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 )
 
 type Stream struct {
@@ -31,6 +32,9 @@ type Profile struct {
 	Audio    AudioProfile    `json:"audio"`
 	Output   OutputProfile   `json:"output"`
 	Template TemplateProfile `json:"template,omitempty"`
+	// ExtraArgs are user-supplied pass-through flags appended just before
+	// "-f <format> <output>". Only used by the standard (non-template) path.
+	ExtraArgs []string `json:"extra_args,omitempty"`
 }
 
 type TemplateProfile struct {
@@ -45,6 +49,42 @@ type VideoProfile struct {
 	Maxrate string `json:"maxrate,omitempty"`
 	Bufsize string `json:"bufsize,omitempty"`
 	Tune    string `json:"tune,omitempty"`
+	// GOP sets -g/-keyint_min for libx264; when unset (0), BuildArgs applies
+	// a safe default of 50 (matches 25fps content) rather than leaving it to
+	// libx264's own default, which is not tuned for multicast IPTV delivery.
+	GOP int `json:"gop,omitempty"`
+	// FPS adds -r <fps> when set.
+	FPS string `json:"fps,omitempty"`
+	// Scale adds -vf scale=<value> (or folds into the logo filter_complex
+	// chain when a logo overlay is also enabled) when set.
+	Scale string `json:"scale,omitempty"`
+}
+
+// SystemConfig holds ffmpeg tuning that is not part of a user-editable
+// encoding profile: UDP resilience for multicast input, corrupt-packet
+// tolerance, and process-level limits. See config.FFmpegConfig, which this
+// mirrors field-for-field.
+type SystemConfig struct {
+	UDPFifoSize        int
+	UDPBufferSize      int
+	UDPOverrunNonfatal bool
+	UDPReuse           bool
+	AnalyzeDuration    int
+	ProbeSize          int
+	Threads            int
+	PktSize            int
+	DiscardCorrupt     bool
+	// LogLevel is the base ffmpeg severity (e.g. "info", "warning", "error").
+	// BuildArgs always combines it with the "level" flag so log lines keep
+	// their "[level]" tag; empty defaults to "info".
+	LogLevel string
+}
+
+func logLevelOrDefault(level string) string {
+	if level == "" {
+		return "info"
+	}
+	return level
 }
 
 type AudioProfile struct {
@@ -113,7 +153,7 @@ func H264UltrafastTemplate4M() Profile {
 	}
 }
 
-func BuildArgs(stream Stream, profile Profile) ([]string, error) {
+func BuildArgs(stream Stream, profile Profile, sys SystemConfig) ([]string, error) {
 	if err := validateInput(stream); err != nil {
 		return nil, fmt.Errorf("input url: %w", err)
 	}
@@ -143,25 +183,67 @@ func BuildArgs(stream Stream, profile Profile) ([]string, error) {
 		audioMap = "0:a:0?"
 	}
 
+	inputURL, err := augmentMulticastInputURL(stream.InputURL, stream.SourceType, sys)
+	if err != nil {
+		return nil, fmt.Errorf("input url: %w", err)
+	}
+	outputURL, err := augmentUDPOutputURL(stream.OutputURL, format, sys)
+	if err != nil {
+		return nil, fmt.Errorf("output url: %w", err)
+	}
+
 	args := []string{
 		"-hide_banner",
 		"-nostdin",
+		// ponytail: -nostats kills ffmpeg's default \r-updated stats line on
+		// stderr. Without it that line never gets a trailing \n, so
+		// bufio.Scanner in jobs.go buffers it forever and eventually dies with
+		// "token too long", which stops draining stderr and hangs ffmpeg.
+		// -progress pipe:1 already gives us the same numbers, structured.
+		"-nostats",
+		// The "level" flag prefixes every line with its real ffmpeg severity
+		// (e.g. "[info]", "[error]"), so jobs.go can classify log lines from
+		// ground truth instead of guessing from text. The base level itself
+		// (sys.LogLevel, default "warning") controls verbosity: "warning"
+		// stops ffmpeg from emitting routine per-stream info banners
+		// (mapping, codec details) at all, which is most of the volume in
+		// the stored log; set it to "info" to get that detail back.
+		"-loglevel", "level+" + logLevelOrDefault(sys.LogLevel),
 		"-progress", "pipe:1",
 		"-stats_period", "1",
+	}
+	// System-level input tolerance: multicast IPTV sees occasional dropped or
+	// corrupt UDP packets, and without these ffmpeg either stalls waiting for
+	// a clean GOP or aborts outright. None of this is user-editable per
+	// profile - see config.FFmpegConfig / SystemConfig.
+	if sys.DiscardCorrupt {
+		args = append(args, "-fflags", "+genpts+discardcorrupt")
+	} else {
+		args = append(args, "-fflags", "+genpts")
+	}
+	args = append(args, "-err_detect", "ignore_err")
+	if sys.AnalyzeDuration > 0 {
+		args = append(args, "-analyzeduration", strconv.Itoa(sys.AnalyzeDuration))
+	}
+	if sys.ProbeSize > 0 {
+		args = append(args, "-probesize", strconv.Itoa(sys.ProbeSize))
 	}
 	if stream.SourceType == "file" {
 		args = append(args, "-re")
 	}
-	args = append(args, "-i", stream.InputURL)
+	args = append(args, "-i", inputURL)
 	if stream.Logo.Enabled {
 		if stream.Logo.Path == "" {
 			return nil, fmt.Errorf("logo path is required")
 		}
 		args = append(args, "-i", stream.Logo.Path)
-		args = append(args, "-filter_complex", fmt.Sprintf("[%s][1:v:0]overlay=%d:%d[v]", videoMap, stream.Logo.X, stream.Logo.Y))
+		args = append(args, "-filter_complex", logoFilterComplex(videoMap, profile.Video.Scale, stream.Logo))
 		args = append(args, "-map", "[v]")
 	} else {
 		args = append(args, "-map", videoMap)
+		if profile.Video.Scale != "" {
+			args = append(args, "-vf", "scale="+profile.Video.Scale)
+		}
 	}
 	if !stream.DisableAudio {
 		audioMaps := stream.AudioMaps
@@ -182,6 +264,9 @@ func BuildArgs(stream Stream, profile Profile) ([]string, error) {
 	if profile.Video.Tune != "" {
 		args = append(args, "-tune", profile.Video.Tune)
 	}
+	if profile.Video.FPS != "" {
+		args = append(args, "-r", profile.Video.FPS)
+	}
 	if profile.Video.Bitrate != "" {
 		args = append(args, "-b:v", profile.Video.Bitrate)
 	}
@@ -191,6 +276,16 @@ func BuildArgs(stream Stream, profile Profile) ([]string, error) {
 	if profile.Video.Bufsize != "" {
 		args = append(args, "-bufsize", profile.Video.Bufsize)
 	}
+	if profile.Video.Codec == "libx264" {
+		gop := profile.Video.GOP
+		if gop <= 0 {
+			gop = 50
+		}
+		args = append(args, "-g", strconv.Itoa(gop), "-keyint_min", strconv.Itoa(gop), "-sc_threshold", "0")
+		if sys.Threads > 0 {
+			args = append(args, "-threads", strconv.Itoa(sys.Threads))
+		}
+	}
 
 	if !stream.DisableAudio {
 		args = append(args, "-c:a", profile.Audio.Codec)
@@ -198,8 +293,71 @@ func BuildArgs(stream Stream, profile Profile) ([]string, error) {
 			args = append(args, "-b:a", profile.Audio.Bitrate)
 		}
 	}
-	args = append(args, "-f", format, stream.OutputURL)
+	if len(profile.ExtraArgs) > 0 {
+		args = append(args, profile.ExtraArgs...)
+	}
+	args = append(args, "-f", format, outputURL)
 	return args, nil
+}
+
+func logoFilterComplex(videoMap, scale string, logo LogoOverlay) string {
+	if scale == "" {
+		return fmt.Sprintf("[%s][1:v:0]overlay=%d:%d[v]", videoMap, logo.X, logo.Y)
+	}
+	return fmt.Sprintf("[%s]scale=%s[scaled];[scaled][1:v:0]overlay=%d:%d[v]", videoMap, scale, logo.X, logo.Y)
+}
+
+// augmentMulticastInputURL adds UDP resilience query params that are system
+// tuning, not user-editable stream config - e.g. it preserves an existing
+// "localaddr=<interface-ip>" the user set to pick which NIC joins the
+// multicast group, only adding to what's already there.
+func augmentMulticastInputURL(rawURL, sourceType string, sys SystemConfig) (string, error) {
+	if sourceType == "file" {
+		return rawURL, nil
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+	if u.Scheme != "udp" {
+		return rawURL, nil
+	}
+	q := u.Query()
+	if sys.UDPOverrunNonfatal {
+		q.Set("overrun_nonfatal", "1")
+	}
+	if sys.UDPFifoSize > 0 {
+		q.Set("fifo_size", strconv.Itoa(sys.UDPFifoSize))
+	}
+	if sys.UDPBufferSize > 0 {
+		q.Set("buffer_size", strconv.Itoa(sys.UDPBufferSize))
+	}
+	if sys.UDPReuse {
+		q.Set("reuse", "1")
+	}
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+// augmentUDPOutputURL sets pkt_size for MPEG-TS-over-UDP output unless the
+// stream's output URL already specifies one explicitly.
+func augmentUDPOutputURL(rawURL, format string, sys SystemConfig) (string, error) {
+	if format != "mpegts" || sys.PktSize <= 0 {
+		return rawURL, nil
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+	if u.Scheme != "udp" {
+		return rawURL, nil
+	}
+	q := u.Query()
+	if q.Get("pkt_size") == "" {
+		q.Set("pkt_size", strconv.Itoa(sys.PktSize))
+		u.RawQuery = q.Encode()
+	}
+	return u.String(), nil
 }
 
 var templateVariablePattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
@@ -237,7 +395,7 @@ func buildTemplateArgs(stream Stream, profile TemplateProfile) ([]string, error)
 		args = append(args, rendered)
 	}
 	if !hasProgress {
-		args = append([]string{"-progress", "pipe:1", "-stats_period", "1"}, args...)
+		args = append([]string{"-nostats", "-loglevel", "level+info", "-progress", "pipe:1", "-stats_period", "1"}, args...)
 	}
 	return args, nil
 }

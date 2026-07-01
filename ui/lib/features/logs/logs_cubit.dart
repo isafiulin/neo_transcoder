@@ -12,12 +12,16 @@ class LogsState extends Equatable {
   const LogsState({
     this.status = LoadStatus.initial,
     this.logs = const <LogEntry>[],
+    this.streams = const <StreamView>[],
+    this.streamId = '',
     this.query = '',
     this.error = '',
   });
 
   final LoadStatus status;
   final List<LogEntry> logs;
+  final List<StreamView> streams;
+  final String streamId;
   final String query;
   final String error;
 
@@ -36,19 +40,24 @@ class LogsState extends Equatable {
   LogsState copyWith({
     LoadStatus? status,
     List<LogEntry>? logs,
+    List<StreamView>? streams,
+    String? streamId,
     String? query,
     String? error,
   }) {
     return LogsState(
       status: status ?? this.status,
       logs: logs ?? this.logs,
+      streams: streams ?? this.streams,
+      streamId: streamId ?? this.streamId,
       query: query ?? this.query,
       error: error ?? this.error,
     );
   }
 
   @override
-  List<Object?> get props => <Object?>[status, logs, query, error];
+  List<Object?> get props =>
+      <Object?>[status, logs, streams, streamId, query, error];
 }
 
 class LogsCubit extends Cubit<LogsState> {
@@ -77,11 +86,19 @@ class LogsCubit extends Cubit<LogsState> {
             : state.status;
     emit(state.copyWith(status: status, error: ''));
     try {
-      final List<LogEntry> logs = await _repository.logs();
+      final String? streamId = state.streamId.isEmpty ? null : state.streamId;
+      final List<Object> results = await Future.wait(<Future<Object>>[
+        _repository.logs(streamId: streamId),
+        _repository.streams(),
+      ]);
       if (isClosed) {
         return;
       }
-      emit(state.copyWith(status: LoadStatus.ready, logs: logs));
+      emit(state.copyWith(
+        status: LoadStatus.ready,
+        logs: results[0] as List<LogEntry>,
+        streams: results[1] as List<StreamView>,
+      ));
     } on Object catch (error) {
       if (isClosed) {
         return;
@@ -99,6 +116,17 @@ class LogsCubit extends Cubit<LogsState> {
 
   void setQuery(String value) {
     emit(state.copyWith(query: value));
+  }
+
+  void setStreamId(String value) {
+    emit(state.copyWith(streamId: value));
+    unawaited(load());
+  }
+
+  Future<void> clear() async {
+    final String? streamId = state.streamId.isEmpty ? null : state.streamId;
+    await _repository.clearLogs(streamId: streamId);
+    await load();
   }
 
   void subscribe() {

@@ -56,6 +56,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   setState(() => _descending = !_descending),
             ),
             const SizedBox(height: 18),
+            _ServerPanel(server: state.server),
+            const SizedBox(height: 18),
             LayoutBuilder(
               builder: (BuildContext context, BoxConstraints constraints) {
                 final int columns = constraints.maxWidth > 1100
@@ -156,6 +158,161 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
     }
   }
+}
+
+class _ServerPanel extends StatelessWidget {
+  const _ServerPanel({required this.server});
+
+  final ServerStats server;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!server.supported) {
+      return NeoPanel(
+        title: 'Server',
+        child: Text(
+          'Server resource metrics are not available on this platform.',
+          style: Theme.of(context).textTheme.labelMedium,
+        ),
+      );
+    }
+    final TextStyle? label = Theme.of(context).textTheme.labelMedium;
+    final TextStyle? value = Theme.of(context).textTheme.titleSmall;
+    return NeoPanel(
+      title: 'Server',
+      child: Wrap(
+        spacing: 24,
+        runSpacing: 16,
+        children: <Widget>[
+          _StatColumn(
+            label: 'CPU usage',
+            value: '${server.cpuPercent.toStringAsFixed(1)}%',
+            labelStyle: label,
+            valueStyle: value,
+          ),
+          _StatColumn(
+            label: 'Load average',
+            value: '${server.loadAvg1.toStringAsFixed(2)}, '
+                '${server.loadAvg5.toStringAsFixed(2)}, '
+                '${server.loadAvg15.toStringAsFixed(2)}',
+            labelStyle: label,
+            valueStyle: value,
+          ),
+          _StatColumn(
+            label: 'CPU cores',
+            value: '${server.cpuCores}',
+            labelStyle: label,
+            valueStyle: value,
+          ),
+          _StatColumn(
+            label: 'System uptime',
+            value: _formatDuration(server.systemUptimeSeconds),
+            labelStyle: label,
+            valueStyle: value,
+          ),
+          _StatColumn(
+            label: 'App uptime',
+            value: _formatDuration(server.appUptimeSeconds),
+            labelStyle: label,
+            valueStyle: value,
+          ),
+          SizedBox(
+            width: 220,
+            child: _UsageBar(
+              label: 'Memory',
+              used: server.memoryUsedBytes,
+              total: server.memoryTotalBytes,
+              labelStyle: label,
+            ),
+          ),
+          SizedBox(
+            width: 220,
+            child: _UsageBar(
+              label: 'Disk',
+              used: server.diskUsedBytes,
+              total: server.diskTotalBytes,
+              labelStyle: label,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatColumn extends StatelessWidget {
+  const _StatColumn({
+    required this.label,
+    required this.value,
+    required this.labelStyle,
+    required this.valueStyle,
+  });
+
+  final String label;
+  final String value;
+  final TextStyle? labelStyle;
+  final TextStyle? valueStyle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(label, style: labelStyle),
+        const SizedBox(height: 4),
+        Text(value, style: valueStyle),
+      ],
+    );
+  }
+}
+
+class _UsageBar extends StatelessWidget {
+  const _UsageBar({
+    required this.label,
+    required this.used,
+    required this.total,
+    required this.labelStyle,
+  });
+
+  final String label;
+  final int used;
+  final int total;
+  final TextStyle? labelStyle;
+
+  @override
+  Widget build(BuildContext context) {
+    final double fraction = total <= 0 ? 0 : (used / total).clamp(0, 1);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: <Widget>[
+            Text(label, style: labelStyle),
+            Text('${_bytes(used)} / ${_bytes(total)}', style: labelStyle),
+          ],
+        ),
+        const SizedBox(height: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(value: fraction, minHeight: 6),
+        ),
+      ],
+    );
+  }
+}
+
+String _formatDuration(int totalSeconds) {
+  final int days = totalSeconds ~/ 86400;
+  final int hours = (totalSeconds % 86400) ~/ 3600;
+  final int minutes = (totalSeconds % 3600) ~/ 60;
+  final int seconds = totalSeconds % 60;
+  final StringBuffer buffer = StringBuffer();
+  if (days > 0) {
+    buffer.write('${days}d ');
+  }
+  buffer.write('${hours}h ${minutes}m ${seconds}s');
+  return buffer.toString();
 }
 
 class _DashboardContent extends StatelessWidget {

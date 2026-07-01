@@ -60,21 +60,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ],
             const SizedBox(height: 18),
-            const NeoPanel(
+            NeoPanel(
               title: 'Runtime',
               child: Wrap(
                 spacing: 18,
                 runSpacing: 12,
                 children: <Widget>[
-                  _SettingValue(
+                  const _SettingValue(
                       label: 'Config', value: '/etc/neotranscoder/config.json'),
-                  _SettingValue(
+                  const _SettingValue(
                       label: 'State',
                       value: '/var/lib/neotranscoder/state.json'),
-                  _SettingValue(
+                  const _SettingValue(
                       label: 'Logs', value: 'journald + in-memory recent logs'),
-                  _SettingValue(
+                  const _SettingValue(
                       label: 'Service', value: 'neotranscoder.service'),
+                  _SettingValue(
+                      label: 'Frontend version',
+                      value: state.frontendVersion.isEmpty
+                          ? '—'
+                          : state.frontendVersion),
+                  _SettingValue(
+                      label: 'Backend version',
+                      value: state.server.version.isEmpty
+                          ? '—'
+                          : state.server.commit.isEmpty
+                              ? state.server.version
+                              : '${state.server.version} (${state.server.commit})'),
                 ],
               ),
             ),

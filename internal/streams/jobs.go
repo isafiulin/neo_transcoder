@@ -17,6 +17,7 @@ import (
 
 type JobManager struct {
 	ffmpegPath string
+	sys        ffmpeg.SystemConfig
 	store      *Store
 	log        *slog.Logger
 
@@ -37,9 +38,10 @@ type restartTracker struct {
 	attempts     int
 }
 
-func NewJobManager(ffmpegPath string, store *Store, log *slog.Logger) *JobManager {
+func NewJobManager(ffmpegPath string, sys ffmpeg.SystemConfig, store *Store, log *slog.Logger) *JobManager {
 	return &JobManager{
 		ffmpegPath: ffmpegPath,
+		sys:        sys,
 		store:      store,
 		log:        log,
 		jobs:       make(map[string]*job),
@@ -77,7 +79,7 @@ func (m *JobManager) start(id string, restarted bool) error {
 			Y:       view.Config.Logo.Y,
 		},
 		Options: view.Config.Options,
-	}, profile)
+	}, profile, m.sys)
 	if err != nil {
 		return err
 	}
@@ -139,12 +141,21 @@ func (m *JobManager) start(id string, restarted bool) error {
 	})
 	m.log.Info("stream started", "id", id, "pid", cmd.Process.Pid)
 
-	go m.captureProgress(id, stdout)
-	go m.captureStderr(id, stderr)
+	go m.captureProgress(id, stdout, cancel)
+	go m.captureStderr(id, stderr, cancel)
 	go m.monitorProcess(id, cmd.Process.Pid, runningJob.done)
 	go m.wait(id, cmd)
 	return nil
 }
+
+// maxLogLineBytes bounds how much a single stderr/progress line can grow
+// before we give up on it. bufio.Scanner's default cap (64KB) is too easy to
+// hit: ffmpeg's console stats line is rewritten in place with a bare \r and
+// never gets a \n, so without -nostats (see args.go) it grows until the
+// scanner errors out, stops draining the pipe, and ffmpeg hangs on a blocked
+// write. 1MB is generous headroom for legitimately long lines (filter graph
+// dumps, long URLs) while still bounded.
+const maxLogLineBytes = 1 << 20
 
 func (m *JobManager) Stop(id string) error {
 	m.mu.Lock()
@@ -237,24 +248,42 @@ func (m *JobManager) wait(id string, cmd *exec.Cmd) {
 	}
 }
 
-func (m *JobManager) captureStderr(id string, stderr io.Reader) {
+func (m *JobManager) captureStderr(id string, stderr io.Reader, kill context.CancelFunc) {
 	scanner := bufio.NewScanner(stderr)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLogLineBytes)
 	for scanner.Scan() {
 		line := scanner.Text()
-		code := classifyError(line)
-		level := "info"
-		if code != "" && code != ErrorUnknown {
-			level = "error"
-			m.store.UpdateState(id, func(state State) State {
-				state.ErrorCode = code
-				state.LastError = line
-				return state
-			})
+		level, message := parseFFmpegLevel(line)
+		code := ""
+		if isPacketLossNoise(strings.ToLower(message)) {
+			// Occasional corrupt/lost UDP packets are expected on multicast
+			// IPTV input; never treat them as an operator-facing error or
+			// let them override to "error" below, regardless of what
+			// severity ffmpeg itself tagged the line with.
+			level = "warn"
+			code = ErrorPacketLoss
+		} else {
+			if level == "warn" || level == "error" {
+				code = classifyError(message)
+			}
+			if code != "" && code != ErrorUnknown {
+				level = "error"
+				m.store.UpdateState(id, func(state State) State {
+					state.ErrorCode = code
+					state.LastError = message
+					return state
+				})
+			}
 		}
-		m.store.AppendLogCode(id, level, code, line)
+		m.store.AppendLogCode(id, level, code, message)
 	}
 	if err := scanner.Err(); err != nil {
 		m.store.AppendLogCode(id, "warn", classifyError(err.Error()), err.Error())
+		// The pipe is no longer being drained, so ffmpeg will block on its
+		// next stderr write and hang instead of exiting. Kill it so wait()
+		// observes a real exit and the normal restart/backoff path applies,
+		// rather than leaving the stream stuck reporting "running" forever.
+		kill()
 	}
 }
 
@@ -348,8 +377,9 @@ func (m *JobManager) monitorProcess(id string, pid int, done <-chan struct{}) {
 	}
 }
 
-func (m *JobManager) captureProgress(id string, stdout io.Reader) {
+func (m *JobManager) captureProgress(id string, stdout io.Reader, kill context.CancelFunc) {
 	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLogLineBytes)
 	fields := make(map[string]string)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -369,6 +399,9 @@ func (m *JobManager) captureProgress(id string, stdout io.Reader) {
 	}
 	if err := scanner.Err(); err != nil {
 		m.store.AppendLogCode(id, "warn", classifyError(err.Error()), err.Error())
+		// Same reasoning as captureStderr: an undrained pipe hangs ffmpeg, so
+		// force the exit instead of leaving a zombie "running" stream.
+		kill()
 	}
 }
 

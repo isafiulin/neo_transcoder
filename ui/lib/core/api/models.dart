@@ -325,6 +325,74 @@ class AuthSession {
   final UserAccount user;
 }
 
+class ServerStats {
+  const ServerStats({
+    this.cpuPercent = 0,
+    this.loadAvg1 = 0,
+    this.loadAvg5 = 0,
+    this.loadAvg15 = 0,
+    this.memoryUsedBytes = 0,
+    this.memoryTotalBytes = 0,
+    this.diskUsedBytes = 0,
+    this.diskTotalBytes = 0,
+    this.systemUptimeSeconds = 0,
+    this.appUptimeSeconds = 0,
+    this.cpuCores = 0,
+    this.supported = false,
+  });
+
+  factory ServerStats.fromJson(Map<String, dynamic> json) {
+    return ServerStats(
+      cpuPercent: (json['cpu_percent'] as num?)?.toDouble() ?? 0,
+      loadAvg1: (json['load_avg_1'] as num?)?.toDouble() ?? 0,
+      loadAvg5: (json['load_avg_5'] as num?)?.toDouble() ?? 0,
+      loadAvg15: (json['load_avg_15'] as num?)?.toDouble() ?? 0,
+      memoryUsedBytes: (json['memory_used_bytes'] as num?)?.toInt() ?? 0,
+      memoryTotalBytes: (json['memory_total_bytes'] as num?)?.toInt() ?? 0,
+      diskUsedBytes: (json['disk_used_bytes'] as num?)?.toInt() ?? 0,
+      diskTotalBytes: (json['disk_total_bytes'] as num?)?.toInt() ?? 0,
+      systemUptimeSeconds:
+          (json['system_uptime_seconds'] as num?)?.toInt() ?? 0,
+      appUptimeSeconds: (json['app_uptime_seconds'] as num?)?.toInt() ?? 0,
+      cpuCores: json['cpu_cores'] as int? ?? 0,
+      supported: json['supported'] as bool? ?? false,
+    );
+  }
+
+  final double cpuPercent;
+  final double loadAvg1;
+  final double loadAvg5;
+  final double loadAvg15;
+  final int memoryUsedBytes;
+  final int memoryTotalBytes;
+  final int diskUsedBytes;
+  final int diskTotalBytes;
+  final int systemUptimeSeconds;
+  final int appUptimeSeconds;
+  final int cpuCores;
+  final bool supported;
+}
+
+class ServerInfo {
+  const ServerInfo({
+    required this.version,
+    required this.commit,
+    required this.date,
+  });
+
+  factory ServerInfo.fromJson(Map<String, dynamic> json) {
+    return ServerInfo(
+      version: json['version'] as String? ?? '',
+      commit: json['commit'] as String? ?? '',
+      date: json['date'] as String? ?? '',
+    );
+  }
+
+  final String version;
+  final String commit;
+  final String date;
+}
+
 class ApiEvent {
   const ApiEvent({
     required this.type,

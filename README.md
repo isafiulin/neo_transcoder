@@ -161,7 +161,17 @@ Example:
   },
   "ffmpeg": {
     "path": "/usr/bin/ffmpeg",
-    "ffprobe_path": "/usr/bin/ffprobe"
+    "ffprobe_path": "/usr/bin/ffprobe",
+    "udp_fifo_size": 100000000,
+    "udp_buffer_size": 8388608,
+    "udp_overrun_nonfatal": true,
+    "udp_reuse": true,
+    "analyzeduration": 10000000,
+    "probesize": 20000000,
+    "threads": 2,
+    "pkt_size": 1316,
+    "discard_corrupt": true,
+    "log_level": "warning"
   },
   "storage": {
     "path": "/var/lib/neotranscoder/state.json"
@@ -172,6 +182,13 @@ Example:
   }
 }
 ```
+
+The `ffmpeg.*` fields beyond `path`/`ffprobe_path` are system-level tuning for
+multicast IPTV delivery (UDP resilience, corrupt-packet tolerance, x264
+thread cap, output packet size). They are not part of an encoding profile and
+are not editable per stream — every stream started by this daemon picks them
+up automatically. All of them have safe defaults, shown above; omitting a
+field from `config.json` keeps that default.
 
 Validate configuration:
 
@@ -837,9 +854,15 @@ Generated FFmpeg shape:
 ffmpeg
   -hide_banner
   -nostdin
+  -nostats
+  -loglevel level+warning
   -progress pipe:1
   -stats_period 1
-  -i udp://239.1.1.1:1234?localaddr=10.0.0.5
+  -fflags +genpts+discardcorrupt
+  -err_detect ignore_err
+  -analyzeduration 10000000
+  -probesize 20000000
+  -i udp://239.1.1.1:1234?buffer_size=8388608&fifo_size=100000000&localaddr=10.0.0.5&overrun_nonfatal=1&reuse=1
   -map 0:v:0
   -map 0:a:0?
   -c:v libx264
@@ -848,11 +871,41 @@ ffmpeg
   -b:v 4000k
   -maxrate 4000k
   -bufsize 8000k
+  -g 50
+  -keyint_min 50
+  -sc_threshold 0
+  -threads 2
   -c:a aac
   -b:a 128k
   -f mpegts
   udp://239.2.2.2:1234?pkt_size=1316
 ```
+
+The `-fflags`/`-err_detect`/`-analyzeduration`/`-probesize` flags and the
+`overrun_nonfatal`/`fifo_size`/`buffer_size`/`reuse`/`pkt_size` query
+parameters come from `ffmpeg.*` system config (see Configuration above), not
+from the encoding profile — they are added automatically regardless of which
+profile a stream uses. `-g`/`-keyint_min`/`-sc_threshold`/`-threads` are added
+for `libx264` specifically: GOP defaults to 50 (tuned for 25fps) unless the
+profile sets its own `video.gop`.
+
+`-loglevel level+<log_level>` controls how much ffmpeg writes to the stream
+log, independent of the `level` tag itself (which is always kept, so log
+entries can be classified by ffmpeg's real severity). The default,
+`log_level: "warning"`, stops ffmpeg from emitting routine per-stream info
+banners (stream mapping, codec details) at all — most of the volume in a
+noisy log — while still surfacing real warnings/errors, including known
+multicast-loss symptoms like `non-existing PPS/SPS referenced` or
+`decode_slice_header error` (these are recognized and stored as a `warning`
+with code `packet_loss`, not escalated to an error or used to trigger a
+restart, since they typically mean lost/corrupt UDP packets or joining a
+multicast feed mid-GOP — not a bug in NeoTranscoder or a broken encode). Set
+`log_level` back to `"info"` to get the full per-stream banner detail for
+troubleshooting.
+
+`localaddr=<interface-ip>` in the input URL is how a stream picks which
+network interface joins the multicast group on a multi-homed host — set it
+per stream when configuring the input URL.
 
 Only UDP and RTP URLs are accepted by the initial argument builder. Additional
 protocols such as SRT, RTMP, HLS, or file outputs can be added explicitly when

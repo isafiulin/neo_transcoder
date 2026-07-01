@@ -105,6 +105,12 @@ class ApiClient {
     return session;
   }
 
+  Future<ServerInfo> health() async {
+    final Response<Map<String, dynamic>> response =
+        await _dio.get<Map<String, dynamic>>('/health');
+    return ServerInfo.fromJson(response.data ?? <String, dynamic>{});
+  }
+
   Future<UserAccount> verify() async {
     final Response<Map<String, dynamic>> response =
         await _dio.get<Map<String, dynamic>>('/auth/verify');
@@ -210,6 +216,17 @@ class ApiClient {
     return (response.data ?? [])
         .map((item) => LogEntry.fromJson(item as Map<String, dynamic>))
         .toList();
+  }
+
+  Future<void> clearLogs({String? streamId}) async {
+    final path = streamId == null ? '/logs' : '/streams/$streamId/logs';
+    await _dio.delete<void>(path);
+  }
+
+  Future<ServerStats> system() async {
+    final Response<Map<String, dynamic>> response =
+        await _dio.get<Map<String, dynamic>>('/system');
+    return ServerStats.fromJson(response.data ?? <String, dynamic>{});
   }
 
   Future<List<StreamView>> metrics() async {
