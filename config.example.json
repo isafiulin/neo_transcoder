@@ -6,16 +6,18 @@
   "ffmpeg": {
     "path": "/usr/bin/ffmpeg",
     "ffprobe_path": "/usr/bin/ffprobe",
-    "udp_fifo_size": 100000000,
-    "udp_buffer_size": 8388608,
-    "udp_overrun_nonfatal": true,
-    "udp_reuse": true,
-    "analyzeduration": 10000000,
-    "probesize": 20000000,
-    "threads": 2,
-    "pkt_size": 1316,
-    "discard_corrupt": true,
-    "log_level": "warning"
+    "log_level": "warning",
+    "udp": {
+      "buffer_size": 8388608,
+      "fifo_size": 100000000,
+      "overrun_nonfatal": true,
+      "reuse": true,
+      "pkt_size": 1316
+    },
+    "probe": {
+      "analyzeduration": 10000000,
+      "probesize": 20000000
+    }
   },
   "storage": {
     "path": "/var/lib/neotranscoder/state.json"

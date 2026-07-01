@@ -255,11 +255,31 @@ class ApiClient {
     return CommandPreview.fromJson(response.data ?? {});
   }
 
+  static const List<String> _sseEventTypes = <String>[
+    'stream_saved',
+    'stream_deleted',
+    'stream_state',
+    'stream_log',
+    'profile_saved',
+    'profile_deleted',
+  ];
+
+  // The access token is embedded in the SSE URL because EventSource can't
+  // send an Authorization header, and it's fixed for the life of that
+  // connection. AccessTokenTTL is 15 minutes (see internal/auth/auth.go) -
+  // if the connection ever drops and the browser's native retry reuses that
+  // now-stale token, the server rejects it with 401 and EventSource treats
+  // that as a terminal error (no further auto-retry), so the live tail dies
+  // silently while the backend keeps working fine. Refreshing the token and
+  // reconnecting proactively - both on error and on a timer well inside the
+  // TTL - avoids ever hitting that dead end.
   Stream<ApiEvent> events() {
     final controller = StreamController<ApiEvent>.broadcast();
-    final String token = Uri.encodeQueryComponent(AuthStore.accessToken ?? '');
-    final source = web.EventSource('/api/events?access_token=$token');
-    final List<web.EventListener> listeners = <web.EventListener>[];
+    web.EventSource? source;
+    List<web.EventListener> listeners = <web.EventListener>[];
+    web.EventListener? errorListener;
+    Timer? reconnectTimer;
+    bool cancelled = false;
 
     void handleEvent(web.Event event) {
       final web.MessageEvent message = event as web.MessageEvent;
@@ -274,29 +294,93 @@ class ApiClient {
       );
     }
 
-    const List<String> eventTypes = <String>[
-      'stream_saved',
-      'stream_deleted',
-      'stream_state',
-      'stream_log',
-      'profile_saved',
-      'profile_deleted',
-    ];
-    for (final String type in eventTypes) {
-      final web.EventListener listener = handleEvent.toJS;
-      listeners.add(listener);
-      source.addEventListener(type, listener);
-    }
-    final web.EventListener errorListener = ((web.Event _) {
-      controller.add(const ApiEvent(type: 'connection_error'));
-    }).toJS;
-    source.addEventListener('error', errorListener);
-    controller.onCancel = () async {
-      for (int index = 0; index < eventTypes.length; index++) {
-        source.removeEventListener(eventTypes[index], listeners[index]);
+    void teardown() {
+      final web.EventSource? current = source;
+      if (current == null) {
+        return;
       }
-      source.removeEventListener('error', errorListener);
-      source.close();
+      for (int index = 0; index < listeners.length; index++) {
+        current.removeEventListener(_sseEventTypes[index], listeners[index]);
+      }
+      final web.EventListener? currentErrorListener = errorListener;
+      if (currentErrorListener != null) {
+        current.removeEventListener('error', currentErrorListener);
+      }
+      current.close();
+      source = null;
+    }
+
+    // connect and scheduleReconnect call each other. Dart local functions
+    // can't forward-reference one another the way top-level functions can,
+    // so scheduleReconnect is declared as a `late` variable first - that
+    // introduces the name for connect() to capture - and assigned after
+    // connect() is declared.
+    late void Function() scheduleReconnect;
+
+    void connect() {
+      teardown();
+      final String token =
+          Uri.encodeQueryComponent(AuthStore.accessToken ?? '');
+      final web.EventSource newSource =
+          web.EventSource('/api/events?access_token=$token');
+      source = newSource;
+      listeners = _sseEventTypes.map((_) => handleEvent.toJS).toList();
+      for (int index = 0; index < _sseEventTypes.length; index++) {
+        newSource.addEventListener(_sseEventTypes[index], listeners[index]);
+      }
+      errorListener = ((web.Event _) {
+        controller.add(const ApiEvent(type: 'connection_error'));
+        scheduleReconnect();
+      }).toJS;
+      newSource.addEventListener('error', errorListener);
+    }
+
+    scheduleReconnect = () {
+      if (cancelled || reconnectTimer != null) {
+        return;
+      }
+      reconnectTimer = Timer(const Duration(seconds: 3), () async {
+        reconnectTimer = null;
+        if (cancelled) {
+          return;
+        }
+        final String? refreshToken = AuthStore.refreshToken;
+        if (refreshToken != null && refreshToken.isNotEmpty) {
+          try {
+            final Dio refreshClient = Dio(BaseOptions(baseUrl: '/api'));
+            final Response<Map<String, dynamic>> response =
+                await refreshClient.post<Map<String, dynamic>>(
+              '/auth/refresh',
+              data: <String, Object?>{'refresh_token': refreshToken},
+            );
+            AuthStore.save(
+                AuthSession.fromJson(response.data ?? <String, dynamic>{}));
+          } on Object {
+            // Keep whatever token we have; connect() will just trigger
+            // another reconnect via the error listener if this one fails too.
+          }
+        }
+        if (!cancelled) {
+          connect();
+        }
+      });
+    };
+
+    connect();
+    // Proactively rotate the connection with a fresh token well before the
+    // 15-minute access token expires, instead of waiting for a drop to
+    // reveal a stale one.
+    final Timer refreshTimer = Timer.periodic(const Duration(minutes: 10), (_) {
+      if (!cancelled) {
+        scheduleReconnect();
+      }
+    });
+
+    controller.onCancel = () {
+      cancelled = true;
+      reconnectTimer?.cancel();
+      refreshTimer.cancel();
+      teardown();
     };
     return controller.stream;
   }

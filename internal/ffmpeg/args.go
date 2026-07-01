@@ -17,6 +17,15 @@ type Stream struct {
 	DisableAudio bool
 	Logo         LogoOverlay
 	Options      map[string]string
+	// KeepStats omits -nostats when true, letting ffmpeg print its own
+	// periodic \r-updated stats line to stderr. Off (false, -nostats
+	// included) by default: that line never gets a trailing newline, so
+	// bufio.Scanner in jobs.go buffers it forever until it hits the 1MB cap,
+	// at which point the scanner errors out and the stream is killed and
+	// restarted - harmless once, but it recurs roughly every couple of
+	// hours for a stream left running with this on. -progress pipe:1
+	// already provides the same numbers, structured, without that risk.
+	KeepStats bool
 }
 
 type LogoOverlay struct {
@@ -35,6 +44,11 @@ type Profile struct {
 	// ExtraArgs are user-supplied pass-through flags appended just before
 	// "-f <format> <output>". Only used by the standard (non-template) path.
 	ExtraArgs []string `json:"extra_args,omitempty"`
+	// Advanced holds encode-affecting flags that are opt-in only: unlike
+	// SystemConfig's UDP/probe tuning, every one of these can change GOP
+	// structure, corrupt-packet tolerance, or effective bitrate, so
+	// BuildArgs never adds any of them unless explicitly set here.
+	Advanced AdvancedProfile `json:"advanced,omitempty"`
 }
 
 type TemplateProfile struct {
@@ -49,10 +63,6 @@ type VideoProfile struct {
 	Maxrate string `json:"maxrate,omitempty"`
 	Bufsize string `json:"bufsize,omitempty"`
 	Tune    string `json:"tune,omitempty"`
-	// GOP sets -g/-keyint_min for libx264; when unset (0), BuildArgs applies
-	// a safe default of 50 (matches 25fps content) rather than leaving it to
-	// libx264's own default, which is not tuned for multicast IPTV delivery.
-	GOP int `json:"gop,omitempty"`
 	// FPS adds -r <fps> when set.
 	FPS string `json:"fps,omitempty"`
 	// Scale adds -vf scale=<value> (or folds into the logo filter_complex
@@ -60,20 +70,36 @@ type VideoProfile struct {
 	Scale string `json:"scale,omitempty"`
 }
 
+// AdvancedProfile holds optional, encode-affecting ffmpeg flags. None of
+// these are applied unless explicitly set - enabling any of them changed
+// GOP structure/error tolerance/output bitrate in ways operators didn't ask
+// for when they were briefly on by default, so they're now opt-in per
+// profile instead of a system default. Int fields are pointers so "0" (a
+// legitimate value, e.g. sc_threshold=0) is distinguishable from "unset".
+type AdvancedProfile struct {
+	EnableGenpts       bool   `json:"enable_genpts,omitempty"`
+	DiscardCorrupt     bool   `json:"discard_corrupt,omitempty"`
+	IgnoreDecodeErrors bool   `json:"ignore_decode_errors,omitempty"`
+	VideoThreads       *int   `json:"video_threads,omitempty"`
+	GOP                *int   `json:"gop,omitempty"`
+	KeyintMin          *int   `json:"keyint_min,omitempty"`
+	SCThreshold        *int   `json:"sc_threshold,omitempty"`
+	Minrate            string `json:"minrate,omitempty"`
+	X264Params         string `json:"x264_params,omitempty"`
+}
+
 // SystemConfig holds ffmpeg tuning that is not part of a user-editable
-// encoding profile: UDP resilience for multicast input, corrupt-packet
-// tolerance, and process-level limits. See config.FFmpegConfig, which this
-// mirrors field-for-field.
+// encoding profile: UDP resilience for multicast transport and input
+// probing. None of this touches the encoder, so it's safe to enable by
+// default - see config.FFmpegConfig, which this mirrors field-for-field.
 type SystemConfig struct {
 	UDPFifoSize        int
 	UDPBufferSize      int
 	UDPOverrunNonfatal bool
 	UDPReuse           bool
+	PktSize            int
 	AnalyzeDuration    int
 	ProbeSize          int
-	Threads            int
-	PktSize            int
-	DiscardCorrupt     bool
 	// LogLevel is the base ffmpeg severity (e.g. "info", "warning", "error").
 	// BuildArgs always combines it with the "level" flag so log lines keep
 	// their "[level]" tag; empty defaults to "info".
@@ -85,6 +111,16 @@ func logLevelOrDefault(level string) string {
 		return "info"
 	}
 	return level
+}
+
+// WithLogLevel returns a copy of sys with LogLevel overridden when override
+// is non-empty - used to let a single stream opt into more (or less)
+// detailed ffmpeg logging than the system default, e.g. while debugging.
+func (sys SystemConfig) WithLogLevel(override string) SystemConfig {
+	if override != "" {
+		sys.LogLevel = override
+	}
+	return sys
 }
 
 type AudioProfile struct {
@@ -195,12 +231,16 @@ func BuildArgs(stream Stream, profile Profile, sys SystemConfig) ([]string, erro
 	args := []string{
 		"-hide_banner",
 		"-nostdin",
+	}
+	if !stream.KeepStats {
 		// ponytail: -nostats kills ffmpeg's default \r-updated stats line on
 		// stderr. Without it that line never gets a trailing \n, so
 		// bufio.Scanner in jobs.go buffers it forever and eventually dies with
 		// "token too long", which stops draining stderr and hangs ffmpeg.
 		// -progress pipe:1 already gives us the same numbers, structured.
-		"-nostats",
+		args = append(args, "-nostats")
+	}
+	args = append(args,
 		// The "level" flag prefixes every line with its real ffmpeg severity
 		// (e.g. "[info]", "[error]"), so jobs.go can classify log lines from
 		// ground truth instead of guessing from text. The base level itself
@@ -211,17 +251,30 @@ func BuildArgs(stream Stream, profile Profile, sys SystemConfig) ([]string, erro
 		"-loglevel", "level+" + logLevelOrDefault(sys.LogLevel),
 		"-progress", "pipe:1",
 		"-stats_period", "1",
+	)
+	// Advanced, encode-affecting flags: opt-in only (see AdvancedProfile).
+	// -fflags/-err_detect change how ffmpeg tolerates corrupt input, which
+	// can shift timing/bitrate, so nothing is added here unless the profile
+	// explicitly asks for it.
+	var fflags []string
+	if profile.Advanced.EnableGenpts {
+		fflags = append(fflags, "genpts")
 	}
-	// System-level input tolerance: multicast IPTV sees occasional dropped or
-	// corrupt UDP packets, and without these ffmpeg either stalls waiting for
-	// a clean GOP or aborts outright. None of this is user-editable per
-	// profile - see config.FFmpegConfig / SystemConfig.
-	if sys.DiscardCorrupt {
-		args = append(args, "-fflags", "+genpts+discardcorrupt")
-	} else {
-		args = append(args, "-fflags", "+genpts")
+	if profile.Advanced.DiscardCorrupt {
+		fflags = append(fflags, "discardcorrupt")
 	}
-	args = append(args, "-err_detect", "ignore_err")
+	if len(fflags) > 0 {
+		flags := "+" + fflags[0]
+		for _, flag := range fflags[1:] {
+			flags += "+" + flag
+		}
+		args = append(args, "-fflags", flags)
+	}
+	if profile.Advanced.IgnoreDecodeErrors {
+		args = append(args, "-err_detect", "ignore_err")
+	}
+	// Probing is safe by construction: it only affects how long/how much
+	// ffmpeg looks at the input before starting, not the encode itself.
 	if sys.AnalyzeDuration > 0 {
 		args = append(args, "-analyzeduration", strconv.Itoa(sys.AnalyzeDuration))
 	}
@@ -276,15 +329,26 @@ func BuildArgs(stream Stream, profile Profile, sys SystemConfig) ([]string, erro
 	if profile.Video.Bufsize != "" {
 		args = append(args, "-bufsize", profile.Video.Bufsize)
 	}
-	if profile.Video.Codec == "libx264" {
-		gop := profile.Video.GOP
-		if gop <= 0 {
-			gop = 50
-		}
-		args = append(args, "-g", strconv.Itoa(gop), "-keyint_min", strconv.Itoa(gop), "-sc_threshold", "0")
-		if sys.Threads > 0 {
-			args = append(args, "-threads", strconv.Itoa(sys.Threads))
-		}
+	if profile.Advanced.Minrate != "" {
+		args = append(args, "-minrate", profile.Advanced.Minrate)
+	}
+	// GOP structure, thread count, and x264-specific tuning all change
+	// encoder behavior - only added when the profile explicitly sets them
+	// (see AdvancedProfile), never a system-wide default.
+	if profile.Advanced.GOP != nil {
+		args = append(args, "-g", strconv.Itoa(*profile.Advanced.GOP))
+	}
+	if profile.Advanced.KeyintMin != nil {
+		args = append(args, "-keyint_min", strconv.Itoa(*profile.Advanced.KeyintMin))
+	}
+	if profile.Advanced.SCThreshold != nil {
+		args = append(args, "-sc_threshold", strconv.Itoa(*profile.Advanced.SCThreshold))
+	}
+	if profile.Advanced.VideoThreads != nil {
+		args = append(args, "-threads", strconv.Itoa(*profile.Advanced.VideoThreads))
+	}
+	if profile.Advanced.X264Params != "" {
+		args = append(args, "-x264-params", profile.Advanced.X264Params)
 	}
 
 	if !stream.DisableAudio {

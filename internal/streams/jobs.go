@@ -2,6 +2,7 @@ package streams
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -78,8 +79,9 @@ func (m *JobManager) start(id string, restarted bool) error {
 			X:       view.Config.Logo.X,
 			Y:       view.Config.Logo.Y,
 		},
-		Options: view.Config.Options,
-	}, profile, m.sys)
+		Options:   view.Config.Options,
+		KeepStats: view.Config.KeepStats,
+	}, profile, m.sys.WithLogLevel(view.Config.LogLevel))
 	if err != nil {
 		return err
 	}
@@ -148,14 +150,36 @@ func (m *JobManager) start(id string, restarted bool) error {
 	return nil
 }
 
-// maxLogLineBytes bounds how much a single stderr/progress line can grow
-// before we give up on it. bufio.Scanner's default cap (64KB) is too easy to
-// hit: ffmpeg's console stats line is rewritten in place with a bare \r and
-// never gets a \n, so without -nostats (see args.go) it grows until the
-// scanner errors out, stops draining the pipe, and ffmpeg hangs on a blocked
-// write. 1MB is generous headroom for legitimately long lines (filter graph
-// dumps, long URLs) while still bounded.
+// maxLogLineBytes bounds how much a single stderr/progress token can grow
+// before we give up on it. bufio.Scanner's default cap (64KB) is generous
+// headroom for legitimately long lines (filter graph dumps, long URLs) while
+// still bounded; scanCRLF (below) keeps ffmpeg's console stats line - a bare
+// \r rewrite with no trailing \n, enabled per-stream via Config.KeepStats -
+// from ever approaching this cap in the first place.
 const maxLogLineBytes = 1 << 20
+
+// scanCRLF is bufio.ScanLines plus treating a bare \r as a token boundary
+// too, not just \n. Without this, ffmpeg's console stats line (a single
+// \r-rewritten line with no trailing \n) is invisible to the scanner as a
+// line boundary and grows without bound for as long as the stream runs,
+// eventually hitting maxLogLineBytes, erroring the scanner out, and forcing
+// a stream restart. With it, each \r-update is its own short token instead.
+func scanCRLF(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	if i := bytes.IndexAny(data, "\r\n"); i >= 0 {
+		advance = i + 1
+		if data[i] == '\r' && i+1 < len(data) && data[i+1] == '\n' {
+			advance++
+		}
+		return advance, data[:i], nil
+	}
+	if atEOF {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
 
 func (m *JobManager) Stop(id string) error {
 	m.mu.Lock()
@@ -250,9 +274,13 @@ func (m *JobManager) wait(id string, cmd *exec.Cmd) {
 
 func (m *JobManager) captureStderr(id string, stderr io.Reader, kill context.CancelFunc) {
 	scanner := bufio.NewScanner(stderr)
+	scanner.Split(scanCRLF)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLogLineBytes)
 	for scanner.Scan() {
 		line := scanner.Text()
+		if isFFmpegStatsLine(line) {
+			continue
+		}
 		level, message := parseFFmpegLevel(line)
 		code := ""
 		if isPacketLossNoise(strings.ToLower(message)) {
@@ -379,6 +407,7 @@ func (m *JobManager) monitorProcess(id string, pid int, done <-chan struct{}) {
 
 func (m *JobManager) captureProgress(id string, stdout io.Reader, kill context.CancelFunc) {
 	scanner := bufio.NewScanner(stdout)
+	scanner.Split(scanCRLF)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLogLineBytes)
 	fields := make(map[string]string)
 	for scanner.Scan() {

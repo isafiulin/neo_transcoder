@@ -528,8 +528,9 @@ func (s *Server) ffmpegCommand(w http.ResponseWriter, r *http.Request) {
 			X:       view.Config.Logo.X,
 			Y:       view.Config.Logo.Y,
 		},
-		Options: view.Config.Options,
-	}, profile, systemConfigFrom(s.cfg.FFmpeg))
+		Options:   view.Config.Options,
+		KeepStats: view.Config.KeepStats,
+	}, profile, systemConfigFrom(s.cfg.FFmpeg).WithLogLevel(view.Config.LogLevel))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -542,15 +543,13 @@ func (s *Server) ffmpegCommand(w http.ResponseWriter, r *http.Request) {
 
 func systemConfigFrom(cfg config.FFmpegConfig) ffmpeg.SystemConfig {
 	return ffmpeg.SystemConfig{
-		UDPFifoSize:        cfg.UDPFifoSize,
-		UDPBufferSize:      cfg.UDPBufferSize,
-		UDPOverrunNonfatal: cfg.UDPOverrunNonfatal,
-		UDPReuse:           cfg.UDPReuse,
-		AnalyzeDuration:    cfg.AnalyzeDuration,
-		ProbeSize:          cfg.ProbeSize,
-		Threads:            cfg.Threads,
-		PktSize:            cfg.PktSize,
-		DiscardCorrupt:     cfg.DiscardCorrupt,
+		UDPFifoSize:        cfg.UDP.FifoSize,
+		UDPBufferSize:      cfg.UDP.BufferSize,
+		UDPOverrunNonfatal: cfg.UDP.OverrunNonfatal,
+		UDPReuse:           cfg.UDP.Reuse,
+		PktSize:            cfg.UDP.PktSize,
+		AnalyzeDuration:    cfg.Probe.AnalyzeDuration,
+		ProbeSize:          cfg.Probe.ProbeSize,
 		LogLevel:           cfg.LogLevel,
 	}
 }

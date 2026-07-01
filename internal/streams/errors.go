@@ -42,7 +42,22 @@ func isPacketLossNoise(lower string) bool {
 		strings.Contains(lower, "non-existing pps") ||
 		strings.Contains(lower, "non-existing sps") ||
 		strings.Contains(lower, "decode_slice_header error") ||
-		strings.Contains(lower, "no frame!")
+		strings.Contains(lower, "no frame!") ||
+		strings.Contains(lower, "co located pocs unavailable")
+}
+
+// isFFmpegStatsLine recognizes ffmpeg's own console stats line (enabled
+// per-stream via Config.KeepStats, off by default in favor of -progress
+// pipe:1). It's rewritten in place with a bare \r and never a trailing \n,
+// repeating roughly once per -stats_period, so logging every occurrence
+// would flood the store with a near-duplicate entry every second forever.
+// -progress pipe:1 already exposes the same frame/fps/bitrate/speed numbers
+// structured (see captureProgress/parseProgress in jobs.go), so these are
+// recognized and discarded rather than stored.
+func isFFmpegStatsLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return (strings.HasPrefix(trimmed, "frame=") || strings.HasPrefix(trimmed, "size=")) &&
+		strings.Contains(trimmed, "bitrate=")
 }
 
 func classifyError(message string) string {

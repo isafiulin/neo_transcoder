@@ -162,16 +162,18 @@ Example:
   "ffmpeg": {
     "path": "/usr/bin/ffmpeg",
     "ffprobe_path": "/usr/bin/ffprobe",
-    "udp_fifo_size": 100000000,
-    "udp_buffer_size": 8388608,
-    "udp_overrun_nonfatal": true,
-    "udp_reuse": true,
-    "analyzeduration": 10000000,
-    "probesize": 20000000,
-    "threads": 2,
-    "pkt_size": 1316,
-    "discard_corrupt": true,
-    "log_level": "warning"
+    "log_level": "warning",
+    "udp": {
+      "buffer_size": 8388608,
+      "fifo_size": 100000000,
+      "overrun_nonfatal": true,
+      "reuse": true,
+      "pkt_size": 1316
+    },
+    "probe": {
+      "analyzeduration": 10000000,
+      "probesize": 20000000
+    }
   },
   "storage": {
     "path": "/var/lib/neotranscoder/state.json"
@@ -183,12 +185,19 @@ Example:
 }
 ```
 
-The `ffmpeg.*` fields beyond `path`/`ffprobe_path` are system-level tuning for
-multicast IPTV delivery (UDP resilience, corrupt-packet tolerance, x264
-thread cap, output packet size). They are not part of an encoding profile and
-are not editable per stream — every stream started by this daemon picks them
-up automatically. All of them have safe defaults, shown above; omitting a
-field from `config.json` keeps that default.
+`ffmpeg.udp.*` and `ffmpeg.probe.*` are system-level UDP transport tuning for
+multicast IPTV delivery and input probing — safe by construction, since
+neither touches the encoder. They are not part of an encoding profile and are
+not editable per stream; every stream started by this daemon picks them up
+automatically. Omitting a field from `config.json` keeps its default, shown
+above.
+
+Encode-affecting flags (`-fflags`, `-err_detect`, `-g`/`-keyint_min`/
+`-sc_threshold`, `-threads`, `-minrate`, `-x264-params`) are **not** part of
+this system config and are never added by default — see `profile.advanced`
+below. Enabling them unconditionally previously changed GOP structure and
+corrupt-packet tolerance in ways that shifted output bitrate, which is why
+they're opt-in per profile instead.
 
 Validate configuration:
 
@@ -704,6 +713,8 @@ Create or update a stream:
     "audio_bitrate": "128k"
   },
   "log_retention_seconds": 60,
+  "log_level": "",
+  "keep_stats": false,
   "enabled": true,
   "restart": {
     "enabled": true,
@@ -786,6 +797,28 @@ the web encoding journal short and prevents noisy FFmpeg output from filling the
 in-memory recent log buffer. Server logs still go to journald and the configured
 daemon log target.
 
+Each stream can also override `log_level` (empty, `info`, `warning`, or
+`error`) to get more or less detail than the system-wide `ffmpeg.log_level`
+(see Configuration above) for just that stream — e.g. set it to `info`
+temporarily on one problem stream to see ffmpeg's full per-stream banner
+(stream mapping, codec details) while debugging, without making every other
+stream's log noisy. Takes effect on the next start/restart, since it changes
+the ffmpeg command line. Retention still applies on top of this, so detailed
+logs roll off the same way once `log_retention_seconds` elapses.
+
+Each stream can also set `keep_stats` (default `false`) to omit `-nostats`
+from that stream's ffmpeg command, letting ffmpeg print its own periodic
+console stats line to stderr alongside `-progress pipe:1`. That line is
+rewritten in place with a bare `\r` and never gets a trailing newline; the
+log-capture scanner (`internal/streams/jobs.go`) splits on a bare `\r` as
+well as `\n` specifically so this never grows unbounded and never forces a
+restart, and separately recognizes and discards the stats line itself
+(`isFFmpegStatsLine`) so it isn't stored as a log entry — `-progress pipe:1`
+already exposes the same numbers (frame/fps/bitrate/speed) structured, so
+logging the console line too would just be a near-duplicate entry every
+`stats_period`. `keep_stats` is safe to leave on; it only matters if
+something external specifically needs ffmpeg's native stats formatting.
+
 Common errors are classified into stable codes for UI filtering and highlighting:
 
 ```text
@@ -858,8 +891,6 @@ ffmpeg
   -loglevel level+warning
   -progress pipe:1
   -stats_period 1
-  -fflags +genpts+discardcorrupt
-  -err_detect ignore_err
   -analyzeduration 10000000
   -probesize 20000000
   -i udp://239.1.1.1:1234?buffer_size=8388608&fifo_size=100000000&localaddr=10.0.0.5&overrun_nonfatal=1&reuse=1
@@ -871,23 +902,45 @@ ffmpeg
   -b:v 4000k
   -maxrate 4000k
   -bufsize 8000k
-  -g 50
-  -keyint_min 50
-  -sc_threshold 0
-  -threads 2
   -c:a aac
   -b:a 128k
   -f mpegts
   udp://239.2.2.2:1234?pkt_size=1316
 ```
 
-The `-fflags`/`-err_detect`/`-analyzeduration`/`-probesize` flags and the
+This is intentionally close to the pre-tuning command: only UDP transport and
+probing changed. `-analyzeduration`/`-probesize` and the
 `overrun_nonfatal`/`fifo_size`/`buffer_size`/`reuse`/`pkt_size` query
-parameters come from `ffmpeg.*` system config (see Configuration above), not
-from the encoding profile — they are added automatically regardless of which
-profile a stream uses. `-g`/`-keyint_min`/`-sc_threshold`/`-threads` are added
-for `libx264` specifically: GOP defaults to 50 (tuned for 25fps) unless the
-profile sets its own `video.gop`.
+parameters come from `ffmpeg.udp`/`ffmpeg.probe` system config (see
+Configuration above) and are added automatically regardless of which profile
+a stream uses — none of it touches the encoder.
+
+`-fflags`, `-err_detect`, `-g`/`-keyint_min`/`-sc_threshold`, `-threads`,
+`-minrate`, and `-x264-params` are **never** added unless a profile
+explicitly opts in via its `advanced` section:
+
+```json
+{
+  "advanced": {
+    "enable_genpts": false,
+    "discard_corrupt": false,
+    "ignore_decode_errors": false,
+    "video_threads": null,
+    "gop": null,
+    "keyint_min": null,
+    "sc_threshold": null,
+    "minrate": null,
+    "x264_params": null
+  }
+}
+```
+
+`enable_genpts`/`discard_corrupt` combine into a single `-fflags`
+(`+genpts`, `+discardcorrupt`, or `+genpts+discardcorrupt`);
+`ignore_decode_errors` adds `-err_detect ignore_err`. These all change how
+tolerant ffmpeg is of corrupt input, which can shift timing and effective
+bitrate — that's why they were pulled out of the system default after
+operators saw exactly that on live streams, and are opt-in per profile now.
 
 `-loglevel level+<log_level>` controls how much ffmpeg writes to the stream
 log, independent of the `level` tag itself (which is always kept, so log

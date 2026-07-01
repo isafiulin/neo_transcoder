@@ -30,8 +30,23 @@ type Config struct {
 	Logo                LogoOverlay       `json:"logo,omitempty"`
 	Options             map[string]string `json:"options,omitempty"`
 	LogRetentionSeconds int               `json:"log_retention_seconds,omitempty"`
-	Enabled             bool              `json:"enabled"`
-	Restart             *RestartPolicy    `json:"restart,omitempty"`
+	// LogLevel overrides the system-wide ffmpeg log verbosity (see
+	// config.FFmpegConfig.LogLevel) for this stream only - e.g. set to
+	// "info" temporarily to see full per-stream ffmpeg detail (stream
+	// mapping, codec banner) while debugging one problem stream, without
+	// making every other stream noisy. Empty means "use the system
+	// default". Takes effect on the next start/restart.
+	LogLevel string `json:"log_level,omitempty"`
+	// KeepStats omits -nostats when true, letting ffmpeg print its own
+	// periodic stats line to stderr instead of relying solely on
+	// -progress pipe:1. Off (false) by default: that line never ends in a
+	// newline, so it grows until it hits the log-capture scanner's buffer
+	// cap, at which point the stream is killed and restarted - harmless
+	// once, but it recurs every couple of hours if left on. See
+	// ffmpeg.Stream.KeepStats.
+	KeepStats bool           `json:"keep_stats,omitempty"`
+	Enabled   bool           `json:"enabled"`
+	Restart   *RestartPolicy `json:"restart,omitempty"`
 }
 
 type LogoOverlay struct {
@@ -663,6 +678,11 @@ func normalizeConfig(cfg Config) (Config, error) {
 	}
 	if cfg.LogRetentionSeconds < 0 {
 		return Config{}, fmt.Errorf("log_retention_seconds must be greater than or equal to 0")
+	}
+	switch cfg.LogLevel {
+	case "", "info", "warning", "error":
+	default:
+		return Config{}, fmt.Errorf("log_level must be one of: info, warning, error")
 	}
 	if err := validateOptions(cfg.Options); err != nil {
 		return Config{}, err

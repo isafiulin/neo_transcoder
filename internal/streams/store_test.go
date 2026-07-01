@@ -66,6 +66,36 @@ func TestStorePersistsProfiles(t *testing.T) {
 	}
 }
 
+func TestStreamLogLevelOverride(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	store, err := NewStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	view, err := store.Upsert(Config{
+		ID:        "channel_1",
+		InputURL:  "udp://239.1.1.1:1234",
+		OutputURL: "udp://239.2.2.2:1234",
+		LogLevel:  "info",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Config.LogLevel != "info" {
+		t.Fatalf("log_level = %q, want info", view.Config.LogLevel)
+	}
+
+	if _, err := store.Upsert(Config{
+		ID:        "channel_2",
+		InputURL:  "udp://239.1.1.1:1234",
+		OutputURL: "udp://239.2.2.2:1234",
+		LogLevel:  "verbose",
+	}); err == nil {
+		t.Fatal("expected invalid log_level to be rejected")
+	}
+}
+
 func testProfile(name string) ffmpeg.Profile {
 	return ffmpeg.Profile{
 		Name: name,

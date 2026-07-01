@@ -71,6 +71,7 @@ func TestIsPacketLossNoise(t *testing.T) {
 		"[h264 @ 0x55e314ef6640] [error] non-existing SPS 0 referenced",
 		"[h264 @ 0x55e314ef6640] [error] decode_slice_header error",
 		"[h264 @ 0x55e314ef6640] [error] no frame!",
+		"[h264 @ 0x55e314efe240] [warning] co located POCs unavailable",
 	}
 	for _, line := range noisy {
 		if !isPacketLossNoise(strings.ToLower(line)) {

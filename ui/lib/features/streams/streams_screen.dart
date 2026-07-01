@@ -227,7 +227,8 @@ class _StreamsScreenState extends State<StreamsScreen> {
         title: const Text('FFmpeg command'),
         content: SizedBox(
           width: 760,
-          child: SelectableText('${preview.path} ${preview.args.join(' ')}'),
+          child: SelectableText(
+              '${_shellQuote(preview.path)} ${preview.args.map(_shellQuote).join(' ')}'),
         ),
         actions: <Widget>[
           TextButton(
@@ -317,6 +318,8 @@ class _StreamDialogState extends State<_StreamDialog> {
   final TextEditingController _logoY = TextEditingController(text: '0');
   final TextEditingController _options = TextEditingController();
   final TextEditingController _logRetention = TextEditingController(text: '60');
+  String _logLevel = '';
+  bool _keepStats = false;
   bool _enabled = true;
   bool _disableAudio = false;
   bool _logoEnabled = false;
@@ -344,6 +347,8 @@ class _StreamDialogState extends State<_StreamDialog> {
     _options.text =
         _encodeKeyValues(item?.config.options ?? <String, String>{});
     _logRetention.text = '${item?.config.logRetentionSeconds ?? 60}';
+    _logLevel = item?.config.logLevel ?? '';
+    _keepStats = item?.config.keepStats ?? false;
     _enabled = item?.config.enabled ?? true;
     _profile = item?.config.profileName ??
         (widget.profiles.isEmpty ? null : widget.profiles.first.name);
@@ -406,6 +411,28 @@ class _StreamDialogState extends State<_StreamDialog> {
                 _Field(
                     controller: _logRetention, label: 'Log retention seconds'),
                 DropdownButtonFormField<String>(
+                  initialValue: _logLevel,
+                  decoration: const InputDecoration(
+                    labelText: 'Log level',
+                    helperText:
+                        'Default follows the system setting (warning). Set to '
+                        'info temporarily to see full ffmpeg detail for this '
+                        'stream while debugging - takes effect on next '
+                        'start/restart.',
+                  ),
+                  items: const <DropdownMenuItem<String>>[
+                    DropdownMenuItem<String>(value: '', child: Text('Default')),
+                    DropdownMenuItem<String>(
+                        value: 'info', child: Text('Info (detailed)')),
+                    DropdownMenuItem<String>(
+                        value: 'warning', child: Text('Warning')),
+                    DropdownMenuItem<String>(
+                        value: 'error', child: Text('Error only')),
+                  ],
+                  onChanged: (String? value) =>
+                      setState(() => _logLevel = value ?? ''),
+                ),
+                DropdownButtonFormField<String>(
                   initialValue: _profile,
                   decoration: const InputDecoration(labelText: 'Profile'),
                   items: widget.profiles
@@ -425,6 +452,18 @@ class _StreamDialogState extends State<_StreamDialog> {
                   title: const Text('Enabled'),
                   onChanged: (bool? value) =>
                       setState(() => _enabled = value ?? false),
+                ),
+                CheckboxListTile(
+                  value: _keepStats,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Keep FFmpeg console stats (-stats)'),
+                  subtitle: const Text(
+                      'Off by default (-nostats). Turning this on lets ffmpeg '
+                      'print its own periodic stats line to stderr as well as '
+                      '-progress pipe:1. Safe to leave on - the stats line '
+                      'itself is not stored in the stream log.'),
+                  onChanged: (bool? value) =>
+                      setState(() => _keepStats = value ?? false),
                 ),
                 CheckboxListTile(
                   value: _disableAudio,
@@ -554,6 +593,8 @@ class _StreamDialogState extends State<_StreamDialog> {
       },
       'options': _parseKeyValues(_options.text),
       'log_retention_seconds': retention,
+      'log_level': _logLevel,
+      'keep_stats': _keepStats,
       'enabled': _enabled,
     });
   }
@@ -838,4 +879,19 @@ class _Field extends StatelessWidget {
       ),
     );
   }
+}
+
+final RegExp _shellSafePattern = RegExp(r'^[A-Za-z0-9_./:=+@-]+$');
+
+/// Quotes an arg for display only (the real process is started via
+/// exec.Command with a []string, never a shell string - see jobs.go). URLs
+/// with "?"/"&" or anything else outside a conservative safe set get
+/// double-quoted so a copy-pasted command line doesn't misparse "&" as
+/// backgrounding or otherwise get mangled by the shell.
+String _shellQuote(String arg) {
+  if (arg.isNotEmpty && _shellSafePattern.hasMatch(arg)) {
+    return arg;
+  }
+  final String escaped = arg.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
+  return '"$escaped"';
 }

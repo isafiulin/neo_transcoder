@@ -6,22 +6,31 @@ import (
 )
 
 // defaultSystemConfig mirrors config.Default().FFmpeg so these tests exercise
-// the same values a real deployment would use.
+// the same values a real deployment would use. Note there's no Threads or
+// DiscardCorrupt here anymore - those are opt-in per profile now (see
+// AdvancedProfile), not a system default.
 func defaultSystemConfig() SystemConfig {
 	return SystemConfig{
 		UDPFifoSize:        100000000,
 		UDPBufferSize:      8388608,
 		UDPOverrunNonfatal: true,
 		UDPReuse:           true,
+		PktSize:            1316,
 		AnalyzeDuration:    10000000,
 		ProbeSize:          20000000,
-		Threads:            2,
-		PktSize:            1316,
-		DiscardCorrupt:     true,
 		LogLevel:           "warning",
 	}
 }
 
+func intPtr(v int) *int {
+	return &v
+}
+
+// TestBuildArgsH264 pins the default command shape to what it was before
+// -fflags/-err_detect/-g/-keyint_min/-sc_threshold/-threads were briefly
+// on by default: they changed encoder behavior (GOP structure, corrupt-input
+// tolerance) and shifted output bitrate, which nobody asked for. Only the
+// UDP-transport and probing additions (safe by construction) remain.
 func TestBuildArgsH264(t *testing.T) {
 	got, err := BuildArgs(Stream{
 		InputURL:  "udp://239.1.1.1:1234?localaddr=10.0.0.5",
@@ -37,8 +46,6 @@ func TestBuildArgsH264(t *testing.T) {
 		"-loglevel", "level+warning",
 		"-progress", "pipe:1",
 		"-stats_period", "1",
-		"-fflags", "+genpts+discardcorrupt",
-		"-err_detect", "ignore_err",
 		"-analyzeduration", "10000000",
 		"-probesize", "20000000",
 		"-i", "udp://239.1.1.1:1234?buffer_size=8388608&fifo_size=100000000&localaddr=10.0.0.5&overrun_nonfatal=1&reuse=1",
@@ -50,10 +57,6 @@ func TestBuildArgsH264(t *testing.T) {
 		"-b:v", "4000k",
 		"-maxrate", "4000k",
 		"-bufsize", "8000k",
-		"-g", "50",
-		"-keyint_min", "50",
-		"-sc_threshold", "0",
-		"-threads", "2",
 		"-c:a", "aac",
 		"-b:a", "128k",
 		"-f", "mpegts",
@@ -164,9 +167,8 @@ func TestBuildArgsFileLogoAndNoAudio(t *testing.T) {
 	}
 }
 
-func TestBuildArgsGOPFPSScale(t *testing.T) {
+func TestBuildArgsFPSScale(t *testing.T) {
 	profile := H264VeryFast4M()
-	profile.Video.GOP = 100
 	profile.Video.FPS = "25"
 	profile.Video.Scale = "1280x720"
 
@@ -180,8 +182,6 @@ func TestBuildArgsGOPFPSScale(t *testing.T) {
 	wantContains := []string{
 		"-r", "25",
 		"-vf", "scale=1280x720",
-		"-g", "100",
-		"-keyint_min", "100",
 	}
 	for _, want := range wantContains {
 		if !contains(got, want) {
@@ -235,6 +235,93 @@ func TestBuildArgsExtraArgs(t *testing.T) {
 	}
 }
 
+// TestBuildArgsDefaultsExcludeAdvancedFlags is the regression test for the
+// bitrate/stability bug: none of these encode-affecting flags should ever
+// appear unless the profile's Advanced section explicitly asks for them.
+func TestBuildArgsDefaultsExcludeAdvancedFlags(t *testing.T) {
+	got, err := BuildArgs(Stream{
+		InputURL:  "udp://239.1.1.1:1234",
+		OutputURL: "udp://239.2.2.2:1234",
+	}, H264VeryFast4M(), defaultSystemConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	forbidden := []string{
+		"-fflags", "-err_detect", "-g", "-keyint_min",
+		"-sc_threshold", "-threads", "-minrate", "-x264-params",
+	}
+	for _, flag := range forbidden {
+		if contains(got, flag) {
+			t.Fatalf("expected %q to be absent by default: %#v", flag, got)
+		}
+	}
+}
+
+func TestBuildArgsKeepStats(t *testing.T) {
+	got, err := BuildArgs(Stream{
+		InputURL:  "udp://239.1.1.1:1234",
+		OutputURL: "udp://239.2.2.2:1234",
+		KeepStats: true,
+	}, H264VeryFast4M(), defaultSystemConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(got, "-nostats") {
+		t.Fatalf("expected -nostats to be omitted when KeepStats is true: %#v", got)
+	}
+}
+
+func TestBuildArgsDefaultIncludesNostats(t *testing.T) {
+	got, err := BuildArgs(Stream{
+		InputURL:  "udp://239.1.1.1:1234",
+		OutputURL: "udp://239.2.2.2:1234",
+	}, H264VeryFast4M(), defaultSystemConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(got, "-nostats") {
+		t.Fatalf("expected -nostats to be present by default: %#v", got)
+	}
+}
+
+func TestBuildArgsAdvancedFlags(t *testing.T) {
+	profile := H264VeryFast4M()
+	profile.Advanced = AdvancedProfile{
+		EnableGenpts:       true,
+		DiscardCorrupt:     true,
+		IgnoreDecodeErrors: true,
+		VideoThreads:       intPtr(2),
+		GOP:                intPtr(50),
+		KeyintMin:          intPtr(50),
+		SCThreshold:        intPtr(0),
+		Minrate:            "2000k",
+		X264Params:         "nal-hrd=cbr",
+	}
+
+	got, err := BuildArgs(Stream{
+		InputURL:  "udp://239.1.1.1:1234",
+		OutputURL: "udp://239.2.2.2:1234",
+	}, profile, defaultSystemConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantContains := []string{
+		"-fflags", "+genpts+discardcorrupt",
+		"-err_detect", "ignore_err",
+		"-threads", "2",
+		"-g", "50",
+		"-keyint_min", "50",
+		"-sc_threshold", "0",
+		"-minrate", "2000k",
+		"-x264-params", "nal-hrd=cbr",
+	}
+	for _, want := range wantContains {
+		if !contains(got, want) {
+			t.Fatalf("expected args to contain %q: %#v", want, got)
+		}
+	}
+}
+
 func TestAugmentMulticastInputURLPreservesExistingParams(t *testing.T) {
 	out, err := augmentMulticastInputURL("udp://239.1.1.1:1234?localaddr=10.0.0.5", "multicast", defaultSystemConfig())
 	if err != nil {
@@ -263,6 +350,21 @@ func TestAugmentUDPOutputURLRespectsExistingPktSize(t *testing.T) {
 	}
 	if out != "udp://239.2.2.2:1234?pkt_size=1400" {
 		t.Fatalf("expected existing pkt_size to be preserved, got %q", out)
+	}
+}
+
+func TestSystemConfigWithLogLevel(t *testing.T) {
+	sys := defaultSystemConfig()
+	if sys.LogLevel != "warning" {
+		t.Fatalf("precondition: default LogLevel = %q, want warning", sys.LogLevel)
+	}
+	overridden := sys.WithLogLevel("info")
+	if overridden.LogLevel != "info" {
+		t.Fatalf("WithLogLevel(%q) = %q, want info", "info", overridden.LogLevel)
+	}
+	unchanged := sys.WithLogLevel("")
+	if unchanged.LogLevel != "warning" {
+		t.Fatalf("WithLogLevel(\"\") = %q, want warning (unchanged)", unchanged.LogLevel)
 	}
 }
 

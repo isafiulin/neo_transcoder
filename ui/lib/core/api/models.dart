@@ -30,6 +30,8 @@ class StreamConfig {
     required this.logo,
     required this.options,
     required this.logRetentionSeconds,
+    required this.logLevel,
+    required this.keepStats,
   });
 
   factory StreamConfig.fromJson(Map<String, dynamic> json) {
@@ -52,6 +54,8 @@ class StreamConfig {
             MapEntry<String, String>(key, value as String? ?? ''),
       ),
       logRetentionSeconds: json['log_retention_seconds'] as int? ?? 60,
+      logLevel: json['log_level'] as String? ?? '',
+      keepStats: json['keep_stats'] as bool? ?? false,
     );
   }
 
@@ -67,6 +71,8 @@ class StreamConfig {
   final LogoOverlay logo;
   final Map<String, String> options;
   final int logRetentionSeconds;
+  final String logLevel;
+  final bool keepStats;
 }
 
 class LogoOverlay {
