@@ -13,6 +13,7 @@ const (
 	ErrorNetwork     = "network_error"
 	ErrorCodec       = "codec_error"
 	ErrorPermission  = "permission_error"
+	ErrorWatchdog    = "watchdog"
 	ErrorUnknown     = "unknown_error"
 	// ErrorPacketLoss marks known-benign multicast packet-loss symptoms -
 	// these are expected on real-world IPTV UDP feeds and are logged as a

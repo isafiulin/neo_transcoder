@@ -145,10 +145,31 @@ class StreamsCubit extends Cubit<StreamsState> {
 
   void subscribe() {
     _events ??= _repository.events().listen((ApiEvent event) {
-      if (_refreshEvents.contains(event.type)) {
+      if (event.type == 'stream_state') {
+        _applyStreamState(event);
+      } else if (_refreshEvents.contains(event.type)) {
         load();
       }
     });
+  }
+
+  void _applyStreamState(ApiEvent event) {
+    final StreamState? streamState = event.streamState;
+    if (streamState == null || event.streamId.isEmpty || isClosed) {
+      return;
+    }
+    final int index = state.streams.indexWhere(
+      (StreamView item) => item.config.id == event.streamId,
+    );
+    if (index == -1) {
+      return;
+    }
+    final List<StreamView> streams = List<StreamView>.of(state.streams);
+    streams[index] = StreamView(
+      config: streams[index].config,
+      state: streamState,
+    );
+    emit(state.copyWith(status: LoadStatus.ready, streams: streams));
   }
 
   @override
@@ -161,7 +182,6 @@ class StreamsCubit extends Cubit<StreamsState> {
 const Set<String> _refreshEvents = <String>{
   'stream_saved',
   'stream_deleted',
-  'stream_state',
   'profile_saved',
   'profile_deleted',
 };

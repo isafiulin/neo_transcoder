@@ -44,9 +44,10 @@ type Config struct {
 	// cap, at which point the stream is killed and restarted - harmless
 	// once, but it recurs every couple of hours if left on. See
 	// ffmpeg.Stream.KeepStats.
-	KeepStats bool           `json:"keep_stats,omitempty"`
-	Enabled   bool           `json:"enabled"`
-	Restart   *RestartPolicy `json:"restart,omitempty"`
+	KeepStats bool            `json:"keep_stats,omitempty"`
+	Enabled   bool            `json:"enabled"`
+	Restart   *RestartPolicy  `json:"restart,omitempty"`
+	Watchdog  *WatchdogPolicy `json:"watchdog,omitempty"`
 }
 
 type LogoOverlay struct {
@@ -61,6 +62,13 @@ type RestartPolicy struct {
 	MaxAttempts    int  `json:"max_attempts"`
 	WindowSeconds  int  `json:"window_seconds"`
 	BackoffSeconds int  `json:"backoff_seconds"`
+}
+
+type WatchdogPolicy struct {
+	Enabled                bool  `json:"enabled"`
+	ProgressTimeoutSeconds int   `json:"progress_timeout_seconds"`
+	MaxMemoryBytes         int64 `json:"max_memory_bytes,omitempty"`
+	MemoryGraceSeconds     int   `json:"memory_grace_seconds,omitempty"`
 }
 
 type State struct {
@@ -692,6 +700,11 @@ func normalizeConfig(cfg Config) (Config, error) {
 		return Config{}, err
 	}
 	cfg.Restart = &restart
+	watchdog, err := normalizeWatchdogPolicy(cfg.Watchdog)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Watchdog = &watchdog
 	return cfg, nil
 }
 
@@ -748,6 +761,44 @@ func normalizeRestartPolicy(policy *RestartPolicy) (RestartPolicy, error) {
 	}
 	if normalized.BackoffSeconds < 1 {
 		return RestartPolicy{}, fmt.Errorf("restart.backoff_seconds must be greater than 0")
+	}
+	return normalized, nil
+}
+
+func DefaultWatchdogPolicy() WatchdogPolicy {
+	return WatchdogPolicy{
+		Enabled:                true,
+		ProgressTimeoutSeconds: 120,
+		MemoryGraceSeconds:     30,
+	}
+}
+
+func normalizeWatchdogPolicy(policy *WatchdogPolicy) (WatchdogPolicy, error) {
+	if policy == nil {
+		return DefaultWatchdogPolicy(), nil
+	}
+	if !policy.Enabled {
+		return *policy, nil
+	}
+	normalized := DefaultWatchdogPolicy()
+	normalized.Enabled = true
+	if policy.ProgressTimeoutSeconds != 0 {
+		normalized.ProgressTimeoutSeconds = policy.ProgressTimeoutSeconds
+	}
+	if policy.MaxMemoryBytes != 0 {
+		normalized.MaxMemoryBytes = policy.MaxMemoryBytes
+	}
+	if policy.MemoryGraceSeconds != 0 {
+		normalized.MemoryGraceSeconds = policy.MemoryGraceSeconds
+	}
+	if normalized.ProgressTimeoutSeconds < 1 {
+		return WatchdogPolicy{}, fmt.Errorf("watchdog.progress_timeout_seconds must be greater than 0")
+	}
+	if normalized.MaxMemoryBytes < 0 {
+		return WatchdogPolicy{}, fmt.Errorf("watchdog.max_memory_bytes must be greater than or equal to 0")
+	}
+	if normalized.MemoryGraceSeconds < 1 {
+		return WatchdogPolicy{}, fmt.Errorf("watchdog.memory_grace_seconds must be greater than 0")
 	}
 	return normalized, nil
 }

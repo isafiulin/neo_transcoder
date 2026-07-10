@@ -721,6 +721,12 @@ Create or update a stream:
     "max_attempts": 5,
     "window_seconds": 300,
     "backoff_seconds": 5
+  },
+  "watchdog": {
+    "enabled": true,
+    "progress_timeout_seconds": 120,
+    "max_memory_bytes": 0,
+    "memory_grace_seconds": 30
   }
 }
 ```
@@ -758,6 +764,25 @@ Automatic restart can be disabled per stream:
 {
   "restart": {
     "enabled": false
+  }
+}
+```
+
+Each running FFmpeg process also has a lightweight watchdog. By default it
+restarts the process if FFmpeg stops reporting structured `-progress` updates
+for 120 seconds. A per-process memory cap is optional: set
+`watchdog.max_memory_bytes` to a positive value, and NeoTranscoder will restart
+FFmpeg only after RSS stays above that value for
+`watchdog.memory_grace_seconds`. The default `max_memory_bytes: 0` means no
+memory cap.
+
+```json
+{
+  "watchdog": {
+    "enabled": true,
+    "progress_timeout_seconds": 120,
+    "max_memory_bytes": 2147483648,
+    "memory_grace_seconds": 30
   }
 }
 ```
@@ -829,6 +854,7 @@ bind_error
 network_error
 codec_error
 permission_error
+watchdog
 unknown_error
 ```
 

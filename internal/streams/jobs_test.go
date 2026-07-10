@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestScanCRLFSplitsOnBareCR(t *testing.T) {
@@ -95,5 +96,44 @@ func TestParseProgress(t *testing.T) {
 	}
 	if got.Bitrate != "4000.0kbits/s" || got.Speed != "1.00x" {
 		t.Fatalf("unexpected metrics: %+v", got)
+	}
+}
+
+func TestWatchdogActionKillsStaleProgress(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	action := watchdogAction(
+		WatchdogPolicy{Enabled: true, ProgressTimeoutSeconds: 10, MemoryGraceSeconds: 1},
+		State{},
+		0,
+		now.Add(-11*time.Second),
+		time.Time{},
+		now,
+	)
+	if action.reason == "" {
+		t.Fatal("expected stale progress to trigger watchdog")
+	}
+}
+
+func TestWatchdogActionHonorsMemoryGrace(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	policy := WatchdogPolicy{
+		Enabled:                true,
+		ProgressTimeoutSeconds: 60,
+		MaxMemoryBytes:         100,
+		MemoryGraceSeconds:     5,
+	}
+	state := State{Metrics: &Metrics{UpdatedAt: now}}
+
+	first := watchdogAction(policy, state, 101, now, time.Time{}, now)
+	if first.reason != "" || first.memoryExceededSince.IsZero() {
+		t.Fatalf("unexpected first decision: %+v", first)
+	}
+	second := watchdogAction(policy, state, 101, now, first.memoryExceededSince, now.Add(5*time.Second))
+	if second.reason == "" {
+		t.Fatal("expected memory grace expiry to trigger watchdog")
+	}
+	cleared := watchdogAction(policy, state, 99, now, first.memoryExceededSince, now.Add(6*time.Second))
+	if cleared.reason != "" || !cleared.memoryExceededSince.IsZero() {
+		t.Fatalf("expected memory grace to clear: %+v", cleared)
 	}
 }

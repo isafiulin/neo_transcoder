@@ -32,6 +32,7 @@ class StreamConfig {
     required this.logRetentionSeconds,
     required this.logLevel,
     required this.keepStats,
+    required this.watchdog,
   });
 
   factory StreamConfig.fromJson(Map<String, dynamic> json) {
@@ -56,6 +57,8 @@ class StreamConfig {
       logRetentionSeconds: json['log_retention_seconds'] as int? ?? 60,
       logLevel: json['log_level'] as String? ?? '',
       keepStats: json['keep_stats'] as bool? ?? false,
+      watchdog: WatchdogPolicy.fromJson(
+          json['watchdog'] as Map<String, dynamic>? ?? <String, dynamic>{}),
     );
   }
 
@@ -73,6 +76,30 @@ class StreamConfig {
   final int logRetentionSeconds;
   final String logLevel;
   final bool keepStats;
+  final WatchdogPolicy watchdog;
+}
+
+class WatchdogPolicy {
+  const WatchdogPolicy({
+    required this.enabled,
+    required this.progressTimeoutSeconds,
+    required this.maxMemoryBytes,
+    required this.memoryGraceSeconds,
+  });
+
+  factory WatchdogPolicy.fromJson(Map<String, dynamic> json) {
+    return WatchdogPolicy(
+      enabled: json['enabled'] as bool? ?? true,
+      progressTimeoutSeconds: json['progress_timeout_seconds'] as int? ?? 120,
+      maxMemoryBytes: (json['max_memory_bytes'] as num?)?.toInt() ?? 0,
+      memoryGraceSeconds: json['memory_grace_seconds'] as int? ?? 30,
+    );
+  }
+
+  final bool enabled;
+  final int progressTimeoutSeconds;
+  final int maxMemoryBytes;
+  final int memoryGraceSeconds;
 }
 
 class LogoOverlay {
@@ -403,17 +430,24 @@ class ApiEvent {
   const ApiEvent({
     required this.type,
     this.streamId = '',
+    this.streamState,
   });
 
   factory ApiEvent.fromJson(Map<String, dynamic> json) {
+    final Object? payload = json['payload'];
     return ApiEvent(
       type: json['type'] as String? ?? '',
       streamId: json['stream_id'] as String? ?? '',
+      streamState:
+          payload is Map<String, dynamic> && json['type'] == 'stream_state'
+              ? StreamState.fromJson(payload)
+              : null,
     );
   }
 
   final String type;
   final String streamId;
+  final StreamState? streamState;
 }
 
 class ProbeResult {

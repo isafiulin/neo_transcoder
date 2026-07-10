@@ -318,8 +318,15 @@ class _StreamDialogState extends State<_StreamDialog> {
   final TextEditingController _logoY = TextEditingController(text: '0');
   final TextEditingController _options = TextEditingController();
   final TextEditingController _logRetention = TextEditingController(text: '60');
+  final TextEditingController _watchdogProgress =
+      TextEditingController(text: '120');
+  final TextEditingController _watchdogMaxMemoryMb =
+      TextEditingController(text: '0');
+  final TextEditingController _watchdogMemoryGrace =
+      TextEditingController(text: '30');
   String _logLevel = '';
   bool _keepStats = false;
+  bool _watchdogEnabled = true;
   bool _enabled = true;
   bool _disableAudio = false;
   bool _logoEnabled = false;
@@ -349,6 +356,13 @@ class _StreamDialogState extends State<_StreamDialog> {
     _logRetention.text = '${item?.config.logRetentionSeconds ?? 60}';
     _logLevel = item?.config.logLevel ?? '';
     _keepStats = item?.config.keepStats ?? false;
+    _watchdogEnabled = item?.config.watchdog.enabled ?? true;
+    _watchdogProgress.text =
+        '${item?.config.watchdog.progressTimeoutSeconds ?? 120}';
+    _watchdogMaxMemoryMb.text =
+        '${((item?.config.watchdog.maxMemoryBytes ?? 0) / (1024 * 1024)).round()}';
+    _watchdogMemoryGrace.text =
+        '${item?.config.watchdog.memoryGraceSeconds ?? 30}';
     _enabled = item?.config.enabled ?? true;
     _profile = item?.config.profileName ??
         (widget.profiles.isEmpty ? null : widget.profiles.first.name);
@@ -366,6 +380,9 @@ class _StreamDialogState extends State<_StreamDialog> {
     _logoY.dispose();
     _options.dispose();
     _logRetention.dispose();
+    _watchdogProgress.dispose();
+    _watchdogMaxMemoryMb.dispose();
+    _watchdogMemoryGrace.dispose();
     super.dispose();
   }
 
@@ -465,6 +482,38 @@ class _StreamDialogState extends State<_StreamDialog> {
                   onChanged: (bool? value) =>
                       setState(() => _keepStats = value ?? false),
                 ),
+                CheckboxListTile(
+                  value: _watchdogEnabled,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Encoding process watchdog'),
+                  subtitle: const Text(
+                      'Restarts ffmpeg when progress stops or an optional memory limit is exceeded.'),
+                  onChanged: (bool? value) =>
+                      setState(() => _watchdogEnabled = value ?? false),
+                ),
+                if (_watchdogEnabled) ...<Widget>[
+                  Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: _Field(
+                          controller: _watchdogProgress,
+                          label: 'Progress timeout seconds',
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _Field(
+                          controller: _watchdogMemoryGrace,
+                          label: 'Memory grace seconds',
+                        ),
+                      ),
+                    ],
+                  ),
+                  _Field(
+                    controller: _watchdogMaxMemoryMb,
+                    label: 'Max memory MB (0 disables)',
+                  ),
+                ],
                 CheckboxListTile(
                   value: _disableAudio,
                   contentPadding: EdgeInsets.zero,
@@ -576,6 +625,7 @@ class _StreamDialogState extends State<_StreamDialog> {
       return;
     }
     final int retention = int.tryParse(_logRetention.text.trim()) ?? 60;
+    final int maxMemoryMb = int.tryParse(_watchdogMaxMemoryMb.text.trim()) ?? 0;
     Navigator.of(context).pop(<String, Object?>{
       'id': _id.text.trim(),
       'name': _name.text.trim(),
@@ -595,6 +645,14 @@ class _StreamDialogState extends State<_StreamDialog> {
       'log_retention_seconds': retention,
       'log_level': _logLevel,
       'keep_stats': _keepStats,
+      'watchdog': <String, Object?>{
+        'enabled': _watchdogEnabled,
+        'progress_timeout_seconds':
+            int.tryParse(_watchdogProgress.text.trim()) ?? 120,
+        'max_memory_bytes': maxMemoryMb <= 0 ? 0 : maxMemoryMb * 1024 * 1024,
+        'memory_grace_seconds':
+            int.tryParse(_watchdogMemoryGrace.text.trim()) ?? 30,
+      },
       'enabled': _enabled,
     });
   }

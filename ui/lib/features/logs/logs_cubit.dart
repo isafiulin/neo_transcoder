@@ -68,10 +68,6 @@ class LogsCubit extends Cubit<LogsState> {
   final TranscoderRepository _repository;
   StreamSubscription<ApiEvent>? _events;
   Timer? _refreshThrottle;
-  // Falls back to a plain periodic reload independent of the SSE stream, so
-  // the log view keeps updating even if live-tail events stop arriving for
-  // some reason the reconnect logic in ApiClient.events() doesn't catch.
-  Timer? _pollTimer;
   bool _loading = false;
   bool _reloadQueued = false;
 
@@ -139,9 +135,6 @@ class LogsCubit extends Cubit<LogsState> {
         _scheduleRefresh();
       }
     });
-    _pollTimer ??= Timer.periodic(const Duration(seconds: 30), (_) {
-      unawaited(load());
-    });
   }
 
   void _scheduleRefresh() {
@@ -157,7 +150,6 @@ class LogsCubit extends Cubit<LogsState> {
   @override
   Future<void> close() async {
     _refreshThrottle?.cancel();
-    _pollTimer?.cancel();
     await _events?.cancel();
     return super.close();
   }

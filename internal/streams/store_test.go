@@ -36,6 +36,9 @@ func TestStorePersistsStreams(t *testing.T) {
 	if view.Config.Restart == nil || !view.Config.Restart.Enabled || view.Config.Restart.MaxAttempts != 5 {
 		t.Fatalf("restart policy = %+v", view.Config.Restart)
 	}
+	if view.Config.Watchdog == nil || !view.Config.Watchdog.Enabled || view.Config.Watchdog.ProgressTimeoutSeconds != 120 {
+		t.Fatalf("watchdog policy = %+v", view.Config.Watchdog)
+	}
 	if view.State.Status != "stopped" {
 		t.Fatalf("status = %q", view.State.Status)
 	}

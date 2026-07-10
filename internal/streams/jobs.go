@@ -145,7 +145,7 @@ func (m *JobManager) start(id string, restarted bool) error {
 
 	go m.captureProgress(id, stdout, cancel)
 	go m.captureStderr(id, stderr, cancel)
-	go m.monitorProcess(id, cmd.Process.Pid, runningJob.done)
+	go m.monitorProcess(id, cmd.Process.Pid, view.Config.Watchdog, cancel, runningJob.done)
 	go m.wait(id, cmd)
 	return nil
 }
@@ -367,12 +367,18 @@ func (m *JobManager) maybeRestart(id, reason string) {
 	}()
 }
 
-func (m *JobManager) monitorProcess(id string, pid int, done <-chan struct{}) {
+func (m *JobManager) monitorProcess(id string, pid int, policy *WatchdogPolicy, kill context.CancelFunc, done <-chan struct{}) {
+	if policy == nil {
+		defaultPolicy := DefaultWatchdogPolicy()
+		policy = &defaultPolicy
+	}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
 	var previous procSample
 	var previousAt time.Time
+	var memoryExceededSince time.Time
+	startedAt := time.Now()
 	for {
 		select {
 		case <-done:
@@ -399,10 +405,65 @@ func (m *JobManager) monitorProcess(id string, pid int, done <-chan struct{}) {
 				state.Process = &process
 				return state
 			})
+			view, ok := m.store.Get(id)
+			if ok {
+				action := watchdogAction(*policy, view.State, process.MemoryBytes, startedAt, memoryExceededSince, now)
+				memoryExceededSince = action.memoryExceededSince
+				if action.reason != "" {
+					m.store.UpdateState(id, func(state State) State {
+						state.Status = "error"
+						state.ErrorCode = ErrorWatchdog
+						state.LastError = action.reason
+						return state
+					})
+					m.store.AppendLogCode(id, "error", ErrorWatchdog, action.reason)
+					kill()
+					return
+				}
+			}
 			previous = current
 			previousAt = now
 		}
 	}
+}
+
+type watchdogDecision struct {
+	reason              string
+	memoryExceededSince time.Time
+}
+
+func watchdogAction(policy WatchdogPolicy, state State, memoryBytes int64, startedAt, memoryExceededSince, now time.Time) watchdogDecision {
+	if !policy.Enabled {
+		return watchdogDecision{memoryExceededSince: memoryExceededSince}
+	}
+	lastProgress := startedAt
+	if state.Metrics != nil && !state.Metrics.UpdatedAt.IsZero() {
+		lastProgress = state.Metrics.UpdatedAt
+	}
+	if now.Sub(lastProgress) > time.Duration(policy.ProgressTimeoutSeconds)*time.Second {
+		return watchdogDecision{
+			reason:              fmt.Sprintf("watchdog: no ffmpeg progress for %s", now.Sub(lastProgress).Round(time.Second)),
+			memoryExceededSince: memoryExceededSince,
+		}
+	}
+	if policy.MaxMemoryBytes <= 0 || memoryBytes <= policy.MaxMemoryBytes {
+		return watchdogDecision{}
+	}
+	if memoryExceededSince.IsZero() {
+		return watchdogDecision{memoryExceededSince: now}
+	}
+	if now.Sub(memoryExceededSince) >= time.Duration(policy.MemoryGraceSeconds)*time.Second {
+		return watchdogDecision{
+			reason: fmt.Sprintf(
+				"watchdog: memory usage %d bytes exceeded limit %d bytes for %s",
+				memoryBytes,
+				policy.MaxMemoryBytes,
+				now.Sub(memoryExceededSince).Round(time.Second),
+			),
+			memoryExceededSince: memoryExceededSince,
+		}
+	}
+	return watchdogDecision{memoryExceededSince: memoryExceededSince}
 }
 
 func (m *JobManager) captureProgress(id string, stdout io.Reader, kill context.CancelFunc) {
