@@ -25,5 +25,12 @@
   "logs": {
     "level": "info",
     "path": "/var/log/neotranscoder/neotranscoder.log"
+  },
+  "srt": {
+    "worker_path": "/usr/local/lib/neotranscoder/neotranscoder-srt-worker",
+    "state_path": "/var/lib/neotranscoder/srt-state.json",
+    "master_key_path": "/var/lib/neotranscoder/srt-master.key",
+    "audit_dir": "/var/log/neotranscoder/srt-audit",
+    "audit_retention_days": 90
   }
 }

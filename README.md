@@ -1,6 +1,7 @@
 # NeoTranscoder
 
-NeoTranscoder is a single-node multicast transcoder manager for Linux servers.
+NeoTranscoder is a single-node multicast transcoder and secure SRT delivery
+manager for Linux servers.
 It is designed for CPU-based transcoding hosts, especially servers built around
 Intel Xeon-class processors without NVIDIA GPUs.
 
@@ -15,6 +16,10 @@ NeoTranscoder is intended for operators who need to receive multicast streams,
 inspect codecs and tracks, select an encoding profile, and publish the result
 back to multicast output.
 
+It can also forward a UDP multicast MPEG-TS input unchanged to authenticated
+SRT callers on the internet. This relay path does not decode or transcode the
+media and does not use FFmpeg.
+
 Typical flow:
 
 ```text
@@ -28,7 +33,7 @@ UDP/RTP multicast input
 The deployment model is intentionally simple:
 
 ```text
-one binary
+one release bundle (daemon plus static SRT worker)
 one systemd service
 one config file
 one local state directory
@@ -54,6 +59,15 @@ FFmpeg / ffprobe
       |
       v
 Multicast input/output
+
+NeoTranscoder daemon
+      |
+      | starts and supervises
+      v
+Static libsrt worker
+      |
+      v
+UDP multicast MPEG-TS -> encrypted SRT callers
 ```
 
 The daemon is responsible for:
@@ -67,6 +81,9 @@ The daemon is responsible for:
 - tracking stream state such as status, PID, start time, stop time, and errors;
 - exposing diagnostics through `/api/doctor`;
 - integrating with systemd.
+- supervising isolated SRT relay workers and applying per-client access policy;
+- recording SRT connection attempts, rejections, sessions, and operator actions
+  in a separate audit journal.
 
 The web UI is a client of the API. It does not touch Linux services or FFmpeg
 directly.
@@ -101,14 +118,16 @@ operator either to login or back to the originally requested URL.
 
 Main UI workflows:
 
-- live dashboard with stream status, media metrics, and process metrics;
+- live dashboard with encoding and SRT relay status, media metrics, active SRT
+  listeners, multicast input health, and process metrics;
 - stream create/edit/delete;
 - stream start/stop/restart;
 - input stream probe;
 - FFmpeg command preview;
 - profile create/edit/delete;
 - recent logs with filtering;
-- service settings overview.
+- service settings overview;
+- SRT relay, access-client, live-session, and audit management.
 
 Source layout:
 
@@ -124,7 +143,125 @@ ui/lib/features/streams
 ui/lib/features/profiles
 ui/lib/features/logs
 ui/lib/features/settings
+ui/lib/features/srt
 ```
+
+## SRT Relay
+
+The SRT module is for contribution and distribution where an existing UDP
+multicast MPEG-TS must be sent over an untrusted IP network without changing
+the elementary streams:
+
+```text
+239.10.10.1:1234 UDP multicast MPEG-TS
+  -> NeoTranscoder SRT worker
+  -> Publish: SRT Caller -> partner public IP:port (partner is Listener)
+  -> Accept: local SRT Listener <- one or more partner Callers
+```
+
+`publish` is the normal point-to-point delivery mode: NeoTranscoder initiates
+one outgoing connection to a literal partner destination IP and UDP port. The
+partner must run an SRT Listener. `listener` keeps the inbound distribution
+mode: NeoTranscoder binds a local UDP port and partner Callers connect to it.
+Old relay records without `direction` remain `listener` for compatibility.
+
+Each relay has its own worker process. One slow receiver cannot block multicast
+ingestion: every session has a bounded queue. The manager restarts failed
+workers with bounded backoff and marks repeated failures as flapping. Enabled
+relays start automatically with `neotranscoder.service`.
+When multicast packets stop for the relay's configured timeout, runtime state
+becomes `degraded` and one `input_stalled` audit event is written. The SRT
+endpoint stays online and state returns to `running` with one `input_restored`
+event as soon as packets resume.
+
+Inbound Listener access is deny-by-default and evaluated during the handshake:
+
+- strict mode requires the caller to send a configured client ID as SRT Stream ID;
+- the source address must match that client's IP/CIDR allowlist;
+- the client must be enabled and assigned to the requested relay;
+- per-client and per-relay concurrent session limits must allow the connection;
+- the selected security mode is either AES-256 plus IP ACL, or IP ACL only.
+
+AES-256 is the default and remains the mode for clients stored by older
+NeoTranscoder versions. Its passphrase is derived from a random local master
+key and client key version. It is never stored in the browser or persisted in
+plaintext. The UI displays it once after client creation, key rotation, or a
+change from unencrypted to AES-256. Rotating a key restarts assigned running
+relays, disconnects their current sessions, and invalidates the old key.
+
+The caller Stream ID may be the plain client ID (`partner-a`) or SRT access
+control syntax such as `#!::u=partner-a,m=request`. A receiver URL is typically:
+
+```text
+srt://public.example.net:9000?mode=caller&transtype=live&streamid=partner-a&passphrase=<one-time-key>&pbkeylen=32
+```
+
+For a legacy receiver configured as `IP ACL only`, omit both encryption
+parameters:
+
+```text
+srt://public.example.net:9000?mode=caller&transtype=live&streamid=partner-legacy
+```
+
+Open the relay's UDP port in the host and upstream firewall. If the server is
+behind NAT, forward that UDP port to the relay bind address. Configure the ACL
+with the source IP seen by the server after NAT, not an address local to the
+receiver. Stream ID is an identifier, not a secret. For an unencrypted client,
+any caller sharing an allowed public NAT address can claim that Stream ID, so a
+dedicated partner IP and a host/edge firewall allowlist are strongly preferred.
+NeoTranscoder rejects `0.0.0.0/0` and `::/0` for unencrypted clients. Broad
+packet-flood limits belong in nftables/firewalld or the edge firewall; the
+worker also applies a bounded per-IP handshake limiter to prevent audit-log
+amplification.
+
+Listener compatibility mode is opt-in for VLC and legacy receivers that cannot
+send a Stream ID. Set `allow_missing_stream_id` and select one explicit
+`default_client_id`. A caller with no Stream ID is evaluated only against that
+client's enabled state, relay assignment, IP/CIDR ACL, session limit, and
+encryption key. NeoTranscoder never guesses a client from overlapping ACLs.
+The selected client cannot be disabled, detached, or deleted until compatibility
+mode is disabled or another default is selected. With AES-256 the minimal URL is:
+
+```text
+srt://public.example.net:9000?passphrase=<one-time-key>
+```
+
+For an `IP ACL only` default client, the URL can be just
+`srt://public.example.net:9000`.
+
+The current SRT relay input contract is raw UDP multicast MPEG-TS. `rtp://` is
+rejected because forwarding RTP headers as TS would corrupt the output. RTP
+header parsing can be added later as a separate input mode.
+
+SRT audit data is separate from FFmpeg/application logs:
+
+```text
+/var/log/neotranscoder/srt-audit/srt-audit-YYYY-MM-DD.jsonl
+```
+
+It records connection attempts, rejection reason, remote IP/port, Stream ID,
+client, relay, peer version, encryption state, session lifecycle, final stats,
+multicast `input_stalled` and `input_restored` transitions, worker failures,
+and operator configuration actions. Files are mode `0600`, synced on append,
+rotated daily, and removed after the configured retention (90 days by default).
+The dashboard receives relay metrics and session lifecycle changes through SSE;
+it does not poll once per second. Each SRT card links directly to the audit view
+filtered for that relay.
+
+On the server, use:
+
+```sh
+journalctl -u neotranscoder -f
+tail -f /var/log/neotranscoder/neotranscoder.log
+tail -f /var/log/neotranscoder/srt-audit/srt-audit-$(date +%F).jsonl
+```
+
+The first two contain daemon lifecycle, worker stderr, startup failures, and
+service diagnostics. The SRT audit answers who attempted to connect, whether
+the attempt was accepted, why it was rejected, when a listener disconnected,
+and when multicast input disappeared or recovered. A stalled input changes the
+relay to `degraded` after `input_timeout_seconds` (10 seconds by default) but
+keeps the SRT listener online.
 
 ## Filesystem Layout
 
@@ -132,9 +269,12 @@ Default Linux layout:
 
 ```text
 /usr/local/bin/neotranscoder
+/usr/local/lib/neotranscoder/neotranscoder-srt-worker
 /etc/systemd/system/neotranscoder.service
 /etc/neotranscoder/config.json
 /var/lib/neotranscoder/state.json
+/var/lib/neotranscoder/srt-state.json
+/var/lib/neotranscoder/srt-master.key
 /var/log/neotranscoder/
 ```
 
@@ -181,6 +321,13 @@ Example:
   "logs": {
     "level": "info",
     "path": "/var/log/neotranscoder/neotranscoder.log"
+  },
+  "srt": {
+    "worker_path": "/usr/local/lib/neotranscoder/neotranscoder-srt-worker",
+    "state_path": "/var/lib/neotranscoder/srt-state.json",
+    "master_key_path": "/var/lib/neotranscoder/srt-master.key",
+    "audit_dir": "/var/log/neotranscoder/srt-audit",
+    "audit_retention_days": 90
   }
 }
 ```
@@ -379,6 +526,8 @@ A release bundle contains:
 ```text
 neotranscoder
 neotranscoder.sha256
+neotranscoder-srt-worker
+neotranscoder-srt-worker.sha256
 install.sh
 update.sh
 uninstall.sh
@@ -432,12 +581,14 @@ The installer:
 
 - creates the `neotranscoder` system user if needed;
 - installs `/usr/local/bin/neotranscoder`;
+- installs the static SRT worker in `/usr/local/lib/neotranscoder` when it is
+  present in the bundle;
 - creates `/etc/neotranscoder`;
 - creates `/var/lib/neotranscoder`;
 - creates `/var/log/neotranscoder`;
 - installs `neotranscoder.service`;
-- runs non-fatal `neotranscoder doctor` checklist for FFmpeg, ffprobe, storage,
-  and log paths;
+- runs non-fatal `neotranscoder doctor` checklist for FFmpeg, ffprobe, the SRT
+  worker, storage/state paths, and log/audit paths;
 - enables and starts the service.
 
 The installer and service manager only operate on NeoTranscoder-owned paths:
@@ -468,8 +619,10 @@ cd ./neotranscoder-release
 sudo ./update.sh --bundle .
 ```
 
-Bundle updates replace the binary and refresh the installed helper scripts:
-`install.sh`, `update.sh`, and `uninstall.sh`.
+Bundle updates replace both versioned binaries and refresh the installed helper
+scripts: `install.sh`, `update.sh`, and `uninstall.sh`. If service restart fails,
+both binaries are rolled back. Use bundle updates when a release changes SRT;
+`--file` and `--url` update only the main binary.
 
 Update from a local binary:
 
@@ -523,8 +676,10 @@ The doctor command checks:
 
 - FFmpeg path;
 - ffprobe path;
+- that the SRT worker exists and can run its `version` command;
 - storage directory writability;
-- log directory writability.
+- log directory writability;
+- SRT state and audit directory writability.
 
 The same information is available through:
 
@@ -894,6 +1049,117 @@ Process metrics are read from Linux `/proc`. CPU percent is calculated from
 process CPU ticks between one-second samples. Values can exceed `100` when
 FFmpeg uses multiple CPU cores.
 
+SRT relays:
+
+```text
+GET    /api/srt/relays
+POST   /api/srt/relays
+GET    /api/srt/relays/{id}
+PUT    /api/srt/relays/{id}
+DELETE /api/srt/relays/{id}
+POST   /api/srt/relays/{id}/start
+POST   /api/srt/relays/{id}/stop
+POST   /api/srt/relays/{id}/restart
+```
+
+Publish/Caller configuration example:
+
+```json
+{
+  "id": "news-hd-partner",
+  "name": "News HD to partner",
+  "direction": "publish",
+  "input_url": "udp://239.10.10.1:1234",
+  "network_interface": "eno1",
+  "destination_address": "203.0.113.50",
+  "destination_port": 9000,
+  "stream_id": "news-hd",
+  "encryption_mode": "aes-256",
+  "latency_ms": 800,
+  "payload_size": 1316,
+  "input_timeout_seconds": 10,
+  "enabled": true
+}
+```
+
+The create response contains the generated publish `passphrase` once when
+AES-256 is enabled. The partner configures the same value on its Listener.
+`none` produces no key. The destination must be a literal IP so DNS cannot
+silently redirect a production feed.
+
+Accept/Listener configuration example:
+
+```json
+{
+  "id": "news-hd-srt",
+  "name": "News HD internet delivery",
+  "input_url": "udp://239.10.10.1:1234?localaddr=10.0.0.5",
+  "network_interface": "eno1",
+  "bind_address": "0.0.0.0",
+  "port": 9000,
+  "latency_ms": 800,
+  "payload_size": 1316,
+  "max_clients": 16,
+  "input_timeout_seconds": 10,
+  "allow_missing_stream_id": true,
+  "default_client_id": "partner-a",
+  "enabled": true
+}
+```
+
+Use either `network_interface` or the input URL `localaddr` query to select the
+multicast interface. The input address must be multicast. Payload size must be
+a multiple of the 188-byte MPEG-TS packet size and cannot exceed 1456 bytes;
+1316 is seven TS packets and is the default.
+The input timeout accepts 3–300 seconds and defaults to 10. It controls health
+state and auditing only; temporary source loss does not restart the worker.
+Compatibility mode is listener-only and requires an existing enabled client
+assigned to this relay. Create the relay in strict mode, create and assign the
+access client, then edit the relay to select it as the compatibility default.
+
+SRT access clients:
+
+```text
+GET    /api/srt/clients
+POST   /api/srt/clients
+PUT    /api/srt/clients/{id}
+DELETE /api/srt/clients/{id}
+POST   /api/srt/clients/{id}/rotate-key
+```
+
+Create-client example:
+
+```json
+{
+  "id": "partner-a",
+  "name": "Distribution partner A",
+  "enabled": true,
+  "encryption_mode": "aes-256",
+  "allowed_relay_ids": ["news-hd-srt"],
+  "allowed_cidrs": ["203.0.113.8", "198.51.100.0/24"],
+  "max_sessions": 1
+}
+```
+
+`encryption_mode` accepts `aes-256` (default) or `none`. AES create, rotate-key,
+and `none` to `aes-256` responses contain `passphrase` exactly once. Client list
+responses never disclose it. Key rotation is rejected for `none`. A plain IP is
+normalized to `/32` or `/128`; an unencrypted client cannot use an IPv4 or IPv6
+`/0`. Changes to an access client restart its affected running relays so the new
+ACL, key, or encryption mode cannot remain unapplied in an old worker.
+
+Sessions and audit:
+
+```text
+GET /api/srt/sessions
+GET /api/srt/sessions?active=true
+GET /api/srt/audit?relay_id=news-hd-srt&client_id=partner-a&type=connection_rejected
+```
+
+All SRT endpoints use the same bearer authentication as the rest of the API.
+SRT runtime updates are also sent through `/api/events`; the UI patches
+per-second relay/session metrics from SSE without polling.
+
 ## Encoding Stack
 
 Default encoding profile:
@@ -1008,6 +1274,16 @@ go run ./cmd/neotranscoder config validate --config ./config.example.json
 go run ./cmd/neotranscoder serve --config ./config.example.json
 ```
 
+CI runs unit, integration, negative-path, race, Flutter state, and native SRT
+media-path tests on every pull request. Important local checks are:
+
+```sh
+go test ./...
+go test -race ./internal/auth ./internal/server ./internal/srtrelay ./internal/srtworker ./internal/streams
+go vet ./...
+cd ui && flutter analyze && flutter test
+```
+
 Build the Flutter Web UI and embed it into the Go binary static assets:
 
 ```sh
@@ -1019,6 +1295,29 @@ Build a local release bundle:
 ```sh
 VERSION=0.1.0 ./scripts/build-release.sh
 ```
+
+The bundle contains both installation helpers, the public project manual, and
+`config.example.json`. A supplied SRT worker is included with its own checksum.
+
+Build the portable static Linux amd64 SRT worker. Docker/buildx is used only as
+a reproducible compiler environment and is not a runtime dependency:
+
+```sh
+VERSION=0.1.0 ./scripts/build-srt-worker-linux.sh
+```
+
+Then include it in the release bundle while building the main Linux binary:
+
+```sh
+VERSION=0.1.0 \
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+SRT_WORKER=dist/srt-worker-linux-amd64/neotranscoder-srt-worker \
+./scripts/build-release.sh
+```
+
+On a Linux builder with libsrt development files, `BUILD_SRT=1` can build the
+worker directly. The static Docker path is preferred for a portable public
+release because it does not depend on the target host's libsrt/OpenSSL ABI.
 
 Release builds embed version metadata with Go linker flags. A production build
 should set at least `VERSION`; `COMMIT` and `DATE` default to the current git
@@ -1034,6 +1333,33 @@ Check a built binary:
 dist/neotranscoder/neotranscoder version
 ```
 
+Run the native media-path test on Linux. It generates a local MPEG-TS
+multicast, verifies that a wrong SRT passphrase is rejected, receives the same
+stream through both encrypted and IP-ACL-only SRT, validates video/audio tracks,
+checks the reported encryption state, and reports worker RSS/file-descriptor
+growth:
+
+```sh
+cd dist/neotranscoder
+./test-srt-native.sh
+./test-srt-caller-native.sh
+```
+
+The second command starts FFmpeg as the partner Listener and verifies the
+NeoTranscoder Publish/Caller path with AES-256 end to end.
+
+Use repeated connections as a bounded soak test:
+
+```sh
+ROUNDS=100 RECEIVE_SECONDS=2 \
+MAX_RSS_GROWTH_KB=65536 MAX_FD_GROWTH=16 \
+./test-srt-native.sh
+```
+
+The script requires Linux, an FFmpeg build with SRT support, ffprobe, and the
+bundled static `neotranscoder-srt-worker`. It uses loopback multicast and high
+ports, does not install files, and cleans up all child processes on exit.
+
 If `sha256sum` or `shasum` is available on the build machine, the release bundle
 also includes `neotranscoder.sha256` for verified URL or file updates.
 
@@ -1048,6 +1374,20 @@ dist/neotranscoder/
 NeoTranscoder starts external FFmpeg processes. Treat stream URLs and profile
 settings as trusted operator input. The built-in user system protects the
 management API with backend-issued bearer access tokens and refresh tokens.
+
+SRT passphrases are sent to workers through stdin, never process arguments, and
+are never logged. Unencrypted clients are an explicit compatibility mode and
+must use restricted IP/CIDR ACLs. The master key and daily audit files use mode `0600`. The
+Linux manager sets a parent-death signal so an SRT worker cannot survive an
+abrupt daemon exit. The systemd unit runs under the dedicated unprivileged user,
+uses `NoNewPrivileges`, a read-only system filesystem, private temporary files,
+restricted address families, and explicit writable state/log paths.
+
+SRT encrypts media transport but does not protect the management HTTP port.
+Place the web/API endpoint behind TLS and a trusted reverse proxy or management
+VPN when it is accessed outside a protected operations network. Expose only the
+specific UDP relay ports required by receivers and combine NeoTranscoder's
+per-client ACL with host/edge firewall policy.
 
 FFmpeg commands are built as an argument array, not as a shell string. This
 avoids shell interpolation and quoting bugs.

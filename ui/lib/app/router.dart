@@ -16,6 +16,14 @@ import 'package:neotranscoder_ui/features/profiles/profiles_screen.dart';
 import 'package:neotranscoder_ui/features/settings/settings_cubit.dart';
 import 'package:neotranscoder_ui/features/settings/settings_screen.dart';
 import 'package:neotranscoder_ui/features/splash/splash_screen.dart';
+import 'package:neotranscoder_ui/features/srt/srt_audit_screen.dart';
+import 'package:neotranscoder_ui/features/srt/srt_client_editor_screen.dart';
+import 'package:neotranscoder_ui/features/srt/srt_clients_screen.dart';
+import 'package:neotranscoder_ui/features/srt/srt_cubit.dart';
+import 'package:neotranscoder_ui/features/srt/srt_module_shell.dart';
+import 'package:neotranscoder_ui/features/srt/srt_relay_editor_screen.dart';
+import 'package:neotranscoder_ui/features/srt/srt_relays_screen.dart';
+import 'package:neotranscoder_ui/features/srt/srt_sessions_screen.dart';
 import 'package:neotranscoder_ui/features/streams/streams_cubit.dart';
 import 'package:neotranscoder_ui/features/streams/streams_screen.dart';
 import 'app_routes.dart';
@@ -117,6 +125,84 @@ GoRouter createRouter(SessionCubit session) {
                 child: const ProfilesScreen(),
               ),
             ),
+          ),
+          ShellRoute(
+            builder:
+                (BuildContext context, GoRouterState state, Widget child) =>
+                    BlocProvider<SrtCubit>(
+              create: (BuildContext context) => SrtCubit(
+                repository: context.read<TranscoderRepository>(),
+              )
+                ..load()
+                ..subscribe(),
+              child: SrtModuleShell(
+                location: state.uri.path,
+                child: child,
+              ),
+            ),
+            routes: <RouteBase>[
+              GoRoute(
+                path: AppRoutes.srt,
+                redirect: (BuildContext context, GoRouterState state) =>
+                    AppRoutes.srtRelays,
+              ),
+              GoRoute(
+                path: AppRoutes.srtRelays,
+                pageBuilder: (BuildContext context, GoRouterState state) =>
+                    _slidePage(state: state, child: const SrtRelaysScreen()),
+              ),
+              GoRoute(
+                path: AppRoutes.srtRelayNew,
+                pageBuilder: (BuildContext context, GoRouterState state) =>
+                    _slidePage(
+                  state: state,
+                  child: const SrtRelayEditorScreen(),
+                ),
+              ),
+              GoRoute(
+                path: '${AppRoutes.srtRelays}/:relayId/edit',
+                pageBuilder: (BuildContext context, GoRouterState state) =>
+                    _slidePage(
+                  state: state,
+                  child: SrtRelayEditorScreen(
+                    relayId: state.pathParameters['relayId'],
+                  ),
+                ),
+              ),
+              GoRoute(
+                path: AppRoutes.srtClients,
+                pageBuilder: (BuildContext context, GoRouterState state) =>
+                    _slidePage(state: state, child: const SrtClientsScreen()),
+              ),
+              GoRoute(
+                path: AppRoutes.srtClientNew,
+                pageBuilder: (BuildContext context, GoRouterState state) =>
+                    _slidePage(
+                  state: state,
+                  child: const SrtClientEditorScreen(),
+                ),
+              ),
+              GoRoute(
+                path: '${AppRoutes.srtClients}/:clientId/edit',
+                pageBuilder: (BuildContext context, GoRouterState state) =>
+                    _slidePage(
+                  state: state,
+                  child: SrtClientEditorScreen(
+                    clientId: state.pathParameters['clientId'],
+                  ),
+                ),
+              ),
+              GoRoute(
+                path: AppRoutes.srtSessions,
+                pageBuilder: (BuildContext context, GoRouterState state) =>
+                    _slidePage(state: state, child: const SrtSessionsScreen()),
+              ),
+              GoRoute(
+                path: AppRoutes.srtAudit,
+                pageBuilder: (BuildContext context, GoRouterState state) =>
+                    _slidePage(state: state, child: const SrtAuditScreen()),
+              ),
+            ],
           ),
           GoRoute(
             path: AppRoutes.logs,

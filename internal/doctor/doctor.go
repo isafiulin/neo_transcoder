@@ -1,10 +1,12 @@
 package doctor
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"neotranscoder/internal/config"
 )
@@ -19,10 +21,27 @@ func Run(cfg config.Config) []Check {
 	checks := []Check{
 		fileExecutable("ffmpeg", cfg.FFmpeg.Path),
 		fileExecutable("ffprobe", cfg.FFmpeg.FFprobePath),
+		executableRuns("srt_worker", cfg.SRT.WorkerPath, "version"),
 		dirWritable("storage_dir", filepath.Dir(cfg.Storage.Path)),
 		dirWritable("log_dir", filepath.Dir(cfg.Logs.Path)),
+		dirWritable("srt_state_dir", filepath.Dir(cfg.SRT.StatePath)),
+		dirWritable("srt_audit_dir", cfg.SRT.AuditDir),
 	}
 	return checks
+}
+
+func executableRuns(name, path string, args ...string) Check {
+	base := fileExecutable(name, path)
+	if !base.OK {
+		return base
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, path, args...).CombinedOutput()
+	if err != nil {
+		return Check{Name: name, OK: false, Detail: fmt.Sprintf("%s: %v: %s", path, err, output)}
+	}
+	return Check{Name: name, OK: true, Detail: fmt.Sprintf("%s runnable", path)}
 }
 
 func HasFailure(checks []Check) bool {

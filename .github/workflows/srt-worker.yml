@@ -1,0 +1,26 @@
+name: SRT worker
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-amd64:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build static SRT worker
+        run: |
+          VERSION=$(cat VERSION) OUT=dist/srt-worker ./scripts/build-srt-worker-linux.sh
+          file dist/srt-worker/neotranscoder-srt-worker | grep 'statically linked'
+          dist/srt-worker/neotranscoder-srt-worker version
+      - name: Native multicast to encrypted SRT test
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          WORKER=dist/srt-worker/neotranscoder-srt-worker \
+            ROUNDS=2 RECEIVE_SECONDS=2 ./scripts/test-srt-native.sh

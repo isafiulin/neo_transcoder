@@ -5,7 +5,11 @@ import 'dart:js_interop';
 import 'package:dio/dio.dart';
 import 'package:web/web.dart' as web;
 
+import 'api_error.dart';
 import 'models.dart';
+import 'srt_models.dart';
+
+export 'api_error.dart';
 
 class ApiClient {
   ApiClient()
@@ -255,6 +259,119 @@ class ApiClient {
     return CommandPreview.fromJson(response.data ?? {});
   }
 
+  Future<List<SrtRelayView>> srtRelays() async {
+    final Response<List<dynamic>> response =
+        await _dio.get<List<dynamic>>('/srt/relays');
+    return (response.data ?? <dynamic>[])
+        .map((dynamic item) =>
+            SrtRelayView.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<SrtRelayView> saveSrtRelay(Map<String, Object?> body,
+      {String? id}) async {
+    final Response<Map<String, dynamic>> response;
+    if (id == null) {
+      response =
+          await _dio.post<Map<String, dynamic>>('/srt/relays', data: body);
+    } else {
+      response =
+          await _dio.put<Map<String, dynamic>>('/srt/relays/$id', data: body);
+    }
+    return SrtRelayView.fromJson(response.data ?? <String, dynamic>{});
+  }
+
+  Future<void> deleteSrtRelay(String id) async {
+    await _dio.delete<void>('/srt/relays/$id');
+  }
+
+  Future<void> startSrtRelay(String id) async {
+    await _dio.post<void>('/srt/relays/$id/start');
+  }
+
+  Future<void> stopSrtRelay(String id) async {
+    await _dio.post<void>('/srt/relays/$id/stop');
+  }
+
+  Future<void> restartSrtRelay(String id) async {
+    await _dio.post<void>('/srt/relays/$id/restart');
+  }
+
+  Future<List<SrtClient>> srtClients() async {
+    final Response<List<dynamic>> response =
+        await _dio.get<List<dynamic>>('/srt/clients');
+    return (response.data ?? <dynamic>[])
+        .map((dynamic item) => SrtClient.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<SrtClientCredential> saveSrtClient(
+    Map<String, Object?> body, {
+    String? id,
+  }) async {
+    final Response<Map<String, dynamic>> response;
+    if (id == null) {
+      response = await _dio.post<Map<String, dynamic>>(
+        '/srt/clients',
+        data: body,
+      );
+    } else {
+      response = await _dio.put<Map<String, dynamic>>(
+        '/srt/clients/$id',
+        data: body,
+      );
+    }
+    return SrtClientCredential.fromJson(
+      response.data ?? <String, dynamic>{},
+    );
+  }
+
+  Future<SrtClientCredential> rotateSrtClientKey(String id) async {
+    final Response<Map<String, dynamic>> response =
+        await _dio.post<Map<String, dynamic>>(
+      '/srt/clients/$id/rotate-key',
+    );
+    return SrtClientCredential.fromJson(
+      response.data ?? <String, dynamic>{},
+    );
+  }
+
+  Future<void> deleteSrtClient(String id) async {
+    await _dio.delete<void>('/srt/clients/$id');
+  }
+
+  Future<List<SrtSession>> srtSessions({bool activeOnly = false}) async {
+    final Response<List<dynamic>> response = await _dio.get<List<dynamic>>(
+      '/srt/sessions',
+      queryParameters: <String, Object?>{'active': activeOnly},
+    );
+    return (response.data ?? <dynamic>[])
+        .map(
+            (dynamic item) => SrtSession.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<List<SrtAuditEvent>> srtAudit({
+    String relayId = '',
+    String clientId = '',
+    String type = '',
+    int limit = 500,
+  }) async {
+    final Response<List<dynamic>> response = await _dio.get<List<dynamic>>(
+      '/srt/audit',
+      queryParameters: <String, Object?>{
+        'relay_id': relayId,
+        'client_id': clientId,
+        'type': type,
+        'limit': limit,
+      },
+    );
+    return (response.data ?? <dynamic>[])
+        .map((dynamic item) =>
+            SrtAuditEvent.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+
   static const List<String> _sseEventTypes = <String>[
     'stream_saved',
     'stream_deleted',
@@ -262,6 +379,21 @@ class ApiClient {
     'stream_log',
     'profile_saved',
     'profile_deleted',
+    'srt_relay_saved',
+    'srt_relay_deleted',
+    'srt_relay_state',
+    'srt_relay_ready',
+    'srt_relay_metrics',
+    'srt_relay_error',
+    'srt_client_saved',
+    'srt_client_deleted',
+    'srt_client_key_rotated',
+    'srt_session_connected',
+    'srt_session_stats',
+    'srt_session_disconnected',
+    'srt_connection_attempt',
+    'srt_connection_rejected',
+    'srt_audit',
   ];
 
   // The access token is embedded in the SSE URL because EventSource can't
@@ -428,27 +560,6 @@ class AuthStore {
     web.window.localStorage.removeItem(_mustChangeKey);
     web.window.localStorage.removeItem(_usernameKey);
   }
-}
-
-class ApiException implements Exception {
-  const ApiException(this.message);
-
-  final String message;
-
-  @override
-  String toString() {
-    return message;
-  }
-}
-
-String apiErrorMessage(Object error) {
-  if (error is DioException && error.error is ApiException) {
-    return (error.error as ApiException).message;
-  }
-  if (error is ApiException) {
-    return error.message;
-  }
-  return error.toString();
 }
 
 String _messageFromDio(DioException error) {

@@ -28,6 +28,36 @@ func TestPromptPortAcceptsCustomPort(t *testing.T) {
 	}
 }
 
+func TestPromptPortRetriesInvalidInput(t *testing.T) {
+	var output bytes.Buffer
+	got, err := promptPort(strings.NewReader("not-a-port\n70000\n18080\n"), &output, 8080)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 18080 || strings.Count(output.String(), "Port must be") != 2 {
+		t.Fatalf("port=%d output=%q", got, output.String())
+	}
+}
+
+func TestPromptPortRejectsInvalidEOF(t *testing.T) {
+	if _, err := promptPort(strings.NewReader("70000"), &bytes.Buffer{}, 8080); err == nil {
+		t.Fatal("expected invalid EOF port error")
+	}
+}
+
+func TestValidatePortBoundaries(t *testing.T) {
+	for _, port := range []int{1, 65535} {
+		if err := validatePort(port); err != nil {
+			t.Fatalf("valid port %d rejected: %v", port, err)
+		}
+	}
+	for _, port := range []int{0, -1, 65536} {
+		if err := validatePort(port); err == nil {
+			t.Fatalf("invalid port %d accepted", port)
+		}
+	}
+}
+
 func TestCopyFileSetsExecutableMode(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "source")

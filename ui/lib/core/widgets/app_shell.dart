@@ -165,6 +165,12 @@ class _SideNavContent extends StatelessWidget {
             selected: location == AppRoutes.profiles,
           ),
           _NavItem(
+            icon: Icons.public_outlined,
+            label: 'SRT Relay',
+            path: AppRoutes.srtRelays,
+            selected: location.startsWith(AppRoutes.srt),
+          ),
+          _NavItem(
             icon: Icons.article_outlined,
             label: 'Logs',
             path: AppRoutes.logs,

@@ -4,5 +4,6 @@ dist/
 *.log
 ui/.dart_tool/
 ui/build/
+ui/coverage/
 internal/server/static/*
 !internal/server/static/index.html

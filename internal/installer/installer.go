@@ -21,6 +21,7 @@ const (
 	ServiceName = "neotranscoder"
 	BinPath     = "/usr/local/bin/neotranscoder"
 	LibDir      = "/usr/local/lib/neotranscoder"
+	WorkerPath  = LibDir + "/neotranscoder-srt-worker"
 	ConfigDir   = "/etc/neotranscoder"
 	StateDir    = "/var/lib/neotranscoder"
 	LogDir      = "/var/log/neotranscoder"
@@ -77,6 +78,9 @@ func Run(opts Options) error {
 		}
 	}
 	if err := installBinary(source, BinPath); err != nil {
+		return err
+	}
+	if err := installSRTWorker(filepath.Dir(source)); err != nil {
 		return err
 	}
 	if err := installHelperScripts(filepath.Dir(source)); err != nil {
@@ -164,7 +168,10 @@ func installBinary(source, target string) error {
 		return nil
 	}
 	if _, err := os.Stat(target); err == nil {
-		backup := filepath.Join(backupDir(), "neotranscoder."+time.Now().UTC().Format("20060102T150405Z"))
+		backup := filepath.Join(
+			backupDir(),
+			filepath.Base(target)+"."+time.Now().UTC().Format("20060102T150405Z"),
+		)
 		if err := copyFile(target, backup, 0o755); err != nil {
 			return err
 		}
@@ -185,6 +192,16 @@ func installHelperScripts(sourceDir string) error {
 	return nil
 }
 
+func installSRTWorker(sourceDir string) error {
+	source := filepath.Join(sourceDir, "neotranscoder-srt-worker")
+	if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	return installBinary(source, WorkerPath)
+}
+
 func writeConfig(port int, force bool) error {
 	path := filepath.Join(ConfigDir, "config.json")
 	cfg := config.Default()
@@ -192,6 +209,9 @@ func writeConfig(port int, force bool) error {
 		if existing, err := config.Load(path); err == nil {
 			cfg = existing
 		}
+	}
+	if cfg.SRT.WorkerPath == "" || cfg.SRT.WorkerPath == "/opt/neotranscoder/bin/neotranscoder-srt-worker" {
+		cfg.SRT.WorkerPath = WorkerPath
 	}
 	cfg.Server.Bind = net.IPv4zero.String()
 	cfg.Server.Port = port
@@ -212,6 +232,12 @@ Restart=always
 RestartSec=5
 LimitNOFILE=1048576
 NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/neotranscoder /var/log/neotranscoder
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

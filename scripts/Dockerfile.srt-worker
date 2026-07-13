@@ -1,0 +1,41 @@
+FROM golang:1.24-alpine3.22 AS build
+
+ARG SRT_VERSION=1.5.5
+ARG SRT_SHA256=c3518bc43a71b5289032395b2db4c3e09e73d78b54247d56c14553a503b491cf
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG DATE=unknown
+
+RUN apk add --no-cache \
+      build-base cmake curl file linux-headers openssl-dev openssl-libs-static pkgconf
+
+RUN curl -fsSL "https://github.com/Haivision/srt/archive/refs/tags/v${SRT_VERSION}.tar.gz" -o /tmp/srt.tar.gz && \
+    echo "${SRT_SHA256}  /tmp/srt.tar.gz" | sha256sum -c - && \
+    mkdir /tmp/srt && tar -xzf /tmp/srt.tar.gz -C /tmp/srt --strip-components=1 && \
+    cmake -S /tmp/srt -B /tmp/srt/build \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=/opt/srt \
+      -DENABLE_APPS=OFF \
+      -DENABLE_SHARED=OFF \
+      -DENABLE_STATIC=ON \
+      -DENABLE_TESTING=OFF && \
+    cmake --build /tmp/srt/build --parallel && \
+    cmake --install /tmp/srt/build
+
+WORKDIR /src
+COPY go.mod ./
+COPY cmd ./cmd
+COPY internal ./internal
+
+ENV PKG_CONFIG_PATH=/opt/srt/lib/pkgconfig
+RUN CGO_ENABLED=1 go build -buildvcs=false -tags libsrt \
+      -ldflags "-linkmode external \
+        -extldflags '-static -Wl,--start-group -lsrt -lstdc++ -lssl -lcrypto -latomic -lpthread -ldl -Wl,--end-group' \
+        -X neotranscoder/internal/buildinfo.Version=${VERSION} \
+        -X neotranscoder/internal/buildinfo.Commit=${COMMIT} \
+        -X neotranscoder/internal/buildinfo.Date=${DATE}" \
+      -o /out/neotranscoder-srt-worker ./cmd/neotranscoder-srt-worker && \
+    file /out/neotranscoder-srt-worker | grep -q 'statically linked'
+
+FROM scratch AS artifact
+COPY --from=build /out/neotranscoder-srt-worker /

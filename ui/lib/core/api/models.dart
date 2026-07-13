@@ -1,3 +1,5 @@
+import 'package:neotranscoder_ui/core/api/srt_models.dart';
+
 class StreamView {
   const StreamView({
     required this.config,
@@ -430,7 +432,11 @@ class ApiEvent {
   const ApiEvent({
     required this.type,
     this.streamId = '',
+    this.relayId = '',
     this.streamState,
+    this.srtRelayState,
+    this.srtSession,
+    this.srtAuditEvent,
   });
 
   factory ApiEvent.fromJson(Map<String, dynamic> json) {
@@ -438,16 +444,43 @@ class ApiEvent {
     return ApiEvent(
       type: json['type'] as String? ?? '',
       streamId: json['stream_id'] as String? ?? '',
+      relayId: json['relay_id'] as String? ?? '',
       streamState:
           payload is Map<String, dynamic> && json['type'] == 'stream_state'
               ? StreamState.fromJson(payload)
+              : null,
+      srtRelayState: payload is Map<String, dynamic> &&
+              const <String>{
+                'srt_relay_state',
+                'srt_relay_ready',
+                'srt_relay_metrics',
+                'srt_relay_error',
+              }.contains(json['type'])
+          ? SrtRelayState.fromJson(payload)
+          : null,
+      srtSession: payload is Map<String, dynamic> &&
+              const <String>{
+                'srt_session_connected',
+                'srt_session_stats',
+                'srt_session_disconnected',
+              }.contains(json['type']) &&
+              payload['session'] is Map<String, dynamic>
+          ? SrtSession.fromJson(payload['session'] as Map<String, dynamic>)
+          : null,
+      srtAuditEvent:
+          payload is Map<String, dynamic> && json['type'] == 'srt_audit'
+              ? SrtAuditEvent.fromJson(payload)
               : null,
     );
   }
 
   final String type;
   final String streamId;
+  final String relayId;
   final StreamState? streamState;
+  final SrtRelayState? srtRelayState;
+  final SrtSession? srtSession;
+  final SrtAuditEvent? srtAuditEvent;
 }
 
 class ProbeResult {

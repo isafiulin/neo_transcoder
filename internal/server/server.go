@@ -18,6 +18,7 @@ import (
 	"neotranscoder/internal/doctor"
 	"neotranscoder/internal/ffmpeg"
 	"neotranscoder/internal/probe"
+	"neotranscoder/internal/srtrelay"
 	"neotranscoder/internal/streams"
 	"neotranscoder/internal/sysinfo"
 )
@@ -30,11 +31,13 @@ type contextKey string
 const userContextKey contextKey = "user"
 
 type Server struct {
-	cfg   config.Config
-	log   *slog.Logger
-	store *streams.Store
-	jobs  *streams.JobManager
-	sys   *sysinfo.Collector
+	cfg      config.Config
+	log      *slog.Logger
+	store    *streams.Store
+	jobs     *streams.JobManager
+	srtStore *srtrelay.Store
+	srtJobs  *srtrelay.Manager
+	sys      *sysinfo.Collector
 }
 
 func New(cfg config.Config, log *slog.Logger) (*Server, error) {
@@ -42,16 +45,54 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stream store: %w", err)
 	}
+	srtStore, err := srtrelay.NewStore(
+		cfg.SRT.StatePath,
+		cfg.SRT.MasterKeyPath,
+		cfg.SRT.AuditDir,
+		cfg.SRT.AuditRetentionDays,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("SRT store: %w", err)
+	}
 	return &Server{
-		cfg:   cfg,
-		log:   log,
-		store: store,
-		jobs:  streams.NewJobManager(cfg.FFmpeg.Path, systemConfigFrom(cfg.FFmpeg), store, log),
-		sys:   sysinfo.NewCollector(""),
+		cfg:      cfg,
+		log:      log,
+		store:    store,
+		jobs:     streams.NewJobManager(cfg.FFmpeg.Path, systemConfigFrom(cfg.FFmpeg), store, log),
+		srtStore: srtStore,
+		srtJobs:  srtrelay.NewManager(cfg.SRT.WorkerPath, srtStore, log),
+		sys:      sysinfo.NewCollector(""),
 	}, nil
 }
 
 func (s *Server) Run(ctx context.Context) error {
+	handler := s.handler()
+	srv := &http.Server{
+		Addr:              s.cfg.Addr(),
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	go s.sys.Run(ctx)
+	go s.srtJobs.StartEnabled()
+
+	go func() {
+		<-ctx.Done()
+		s.jobs.StopAll()
+		s.srtJobs.StopAll()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+
+	s.log.Info("starting neotranscoder", "addr", s.cfg.Addr())
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	return nil
+}
+
+func (s *Server) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/auth/required", s.authRequired)
@@ -86,30 +127,23 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /api/streams/{id}/ffmpeg-command", s.ffmpegCommand)
 	mux.HandleFunc("GET /api/streams/{id}/logs", s.streamLogs)
 	mux.HandleFunc("DELETE /api/streams/{id}/logs", s.clearStreamLogs)
+	mux.HandleFunc("GET /api/srt/relays", s.listSRTRelays)
+	mux.HandleFunc("POST /api/srt/relays", s.upsertSRTRelay)
+	mux.HandleFunc("GET /api/srt/relays/{id}", s.getSRTRelay)
+	mux.HandleFunc("PUT /api/srt/relays/{id}", s.upsertSRTRelay)
+	mux.HandleFunc("DELETE /api/srt/relays/{id}", s.deleteSRTRelay)
+	mux.HandleFunc("POST /api/srt/relays/{id}/start", s.startSRTRelay)
+	mux.HandleFunc("POST /api/srt/relays/{id}/stop", s.stopSRTRelay)
+	mux.HandleFunc("POST /api/srt/relays/{id}/restart", s.restartSRTRelay)
+	mux.HandleFunc("GET /api/srt/clients", s.listSRTClients)
+	mux.HandleFunc("POST /api/srt/clients", s.upsertSRTClient)
+	mux.HandleFunc("PUT /api/srt/clients/{id}", s.upsertSRTClient)
+	mux.HandleFunc("DELETE /api/srt/clients/{id}", s.deleteSRTClient)
+	mux.HandleFunc("POST /api/srt/clients/{id}/rotate-key", s.rotateSRTClientKey)
+	mux.HandleFunc("GET /api/srt/sessions", s.listSRTSessions)
+	mux.HandleFunc("GET /api/srt/audit", s.listSRTAudit)
 	mux.Handle("/", s.web())
-
-	handler := s.auth(mux)
-	srv := &http.Server{
-		Addr:              s.cfg.Addr(),
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-
-	go s.sys.Run(ctx)
-
-	go func() {
-		<-ctx.Done()
-		s.jobs.StopAll()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-	}()
-
-	s.log.Info("starting neotranscoder", "addr", s.cfg.Addr())
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return err
-	}
-	return nil
+	return s.auth(mux)
 }
 
 func (s *Server) auth(next http.Handler) http.Handler {
@@ -342,16 +376,26 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	events := s.store.Subscribe(r.Context())
+	streamEvents := s.store.Subscribe(r.Context())
+	srtEvents := s.srtStore.Subscribe(r.Context())
+	flusher.Flush()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case event, ok := <-events:
+		case event, ok := <-streamEvents:
 			if !ok {
 				return
 			}
-			if err := writeSSE(w, event); err != nil {
+			if err := writeSSE(w, event.Type, event); err != nil {
+				return
+			}
+			flusher.Flush()
+		case event, ok := <-srtEvents:
+			if !ok {
+				return
+			}
+			if err := writeSSE(w, event.Type, event); err != nil {
 				return
 			}
 			flusher.Flush()
@@ -564,6 +608,252 @@ func (s *Server) clearStreamLogs(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) listSRTRelays(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.srtStore.ListRelays())
+}
+
+func (s *Server) getSRTRelay(w http.ResponseWriter, r *http.Request) {
+	view, ok := s.srtStore.GetRelay(r.PathValue("id"))
+	if !ok {
+		writeErrorText(w, http.StatusNotFound, "SRT relay not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+func (s *Server) upsertSRTRelay(w http.ResponseWriter, r *http.Request) {
+	var relay srtrelay.Relay
+	if !readJSON(w, r, &relay) {
+		return
+	}
+	if pathID := r.PathValue("id"); pathID != "" {
+		relay.ID = pathID
+	}
+	wasRunning := s.srtJobs.IsRunning(relay.ID)
+	view, err := s.srtStore.UpsertRelay(relay)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.recordSRTOperatorAudit(r, srtrelay.AuditEvent{
+		Type:    "relay_config_saved",
+		RelayID: view.Config.ID,
+		Details: map[string]any{"name": view.Config.Name, "listen_port": view.Config.Port},
+	})
+	if wasRunning {
+		var applyErr error
+		if view.Config.Enabled {
+			applyErr = s.srtJobs.Restart(view.Config.ID)
+		} else {
+			applyErr = s.srtJobs.Stop(view.Config.ID)
+		}
+		if applyErr != nil {
+			s.srtApplyWarning(w, view.Config.ID, "", applyErr)
+		}
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+func (s *Server) deleteSRTRelay(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.srtJobs.IsRunning(id) {
+		writeErrorText(w, http.StatusBadRequest, "relay must be stopped before deletion")
+		return
+	}
+	deleted, err := s.srtStore.DeleteRelay(id)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !deleted {
+		writeErrorText(w, http.StatusNotFound, "SRT relay not found")
+		return
+	}
+	s.recordSRTOperatorAudit(r, srtrelay.AuditEvent{Type: "relay_config_deleted", RelayID: id, Level: "warning"})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) startSRTRelay(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.srtJobs.Start(id); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.recordSRTOperatorAudit(r, srtrelay.AuditEvent{Type: "relay_started", RelayID: id})
+	s.getSRTRelay(w, r)
+}
+
+func (s *Server) stopSRTRelay(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.srtJobs.Stop(id); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.recordSRTOperatorAudit(r, srtrelay.AuditEvent{Type: "relay_stopped", RelayID: id})
+	s.getSRTRelay(w, r)
+}
+
+func (s *Server) restartSRTRelay(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.srtJobs.Restart(id); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.recordSRTOperatorAudit(r, srtrelay.AuditEvent{Type: "relay_restarted", RelayID: id})
+	s.getSRTRelay(w, r)
+}
+
+func (s *Server) listSRTClients(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.srtStore.ListClients())
+}
+
+func (s *Server) upsertSRTClient(w http.ResponseWriter, r *http.Request) {
+	var client srtrelay.Client
+	if !readJSON(w, r, &client) {
+		return
+	}
+	pathID := r.PathValue("id")
+	if pathID != "" {
+		client.ID = pathID
+	} else if _, exists := s.srtStore.GetClient(client.ID); exists {
+		writeErrorText(w, http.StatusConflict, "SRT client already exists")
+		return
+	}
+	previous, hadPrevious := s.srtStore.GetClient(client.ID)
+	credential, err := s.srtStore.UpsertClient(client)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.recordSRTOperatorAudit(r, srtrelay.AuditEvent{
+		Type:     "client_config_saved",
+		ClientID: credential.Client.ID,
+		Details: map[string]any{
+			"allowed_relays":  credential.Client.AllowedRelayIDs,
+			"allowed_cidrs":   credential.Client.AllowedCIDRs,
+			"encryption_mode": credential.Client.EncryptionMode,
+		},
+	})
+	if err := s.restartSRTClientRelays(previous, credential.Client, hadPrevious); err != nil {
+		s.srtApplyWarning(w, "", credential.Client.ID, err)
+	}
+	status := http.StatusOK
+	if pathID == "" {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, credential)
+}
+
+func (s *Server) rotateSRTClientKey(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := s.srtStore.GetClient(id); !ok {
+		writeErrorText(w, http.StatusNotFound, "SRT client not found")
+		return
+	}
+	credential, err := s.srtStore.RotateClientKey(id)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.recordSRTOperatorAudit(r, srtrelay.AuditEvent{Type: "client_key_rotated", ClientID: id, Level: "warning"})
+	if err := s.restartSRTRelays(credential.Client.AllowedRelayIDs); err != nil {
+		s.srtApplyWarning(w, "", credential.Client.ID, err)
+	}
+	writeJSON(w, http.StatusOK, credential)
+}
+
+func (s *Server) deleteSRTClient(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	client, _ := s.srtStore.GetClient(id)
+	deleted, err := s.srtStore.DeleteClient(id)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !deleted {
+		writeErrorText(w, http.StatusNotFound, "SRT client not found")
+		return
+	}
+	s.recordSRTOperatorAudit(r, srtrelay.AuditEvent{Type: "client_deleted", ClientID: id, Level: "warning"})
+	if err := s.restartSRTRelays(client.AllowedRelayIDs); err != nil {
+		s.srtApplyWarning(w, "", id, err)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) restartSRTClientRelays(previous, current srtrelay.Client, hadPrevious bool) error {
+	ids := append([]string(nil), current.AllowedRelayIDs...)
+	if hadPrevious {
+		ids = append(ids, previous.AllowedRelayIDs...)
+	}
+	return s.restartSRTRelays(ids)
+}
+
+func (s *Server) restartSRTRelays(ids []string) error {
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok || !s.srtJobs.IsRunning(id) {
+			continue
+		}
+		seen[id] = struct{}{}
+		view, exists := s.srtStore.GetRelay(id)
+		if !exists {
+			continue
+		}
+		var err error
+		if view.Config.Enabled {
+			err = s.srtJobs.Restart(id)
+		} else {
+			err = s.srtJobs.Stop(id)
+		}
+		if err != nil {
+			return fmt.Errorf("relay %s: %w", id, err)
+		}
+	}
+	return nil
+}
+
+func (s *Server) srtApplyWarning(w http.ResponseWriter, relayID, clientID string, err error) {
+	message := "configuration persisted but running SRT relay restart failed: " + err.Error()
+	w.Header().Set("X-Neotranscoder-Warning", message)
+	s.log.Error("apply SRT configuration", "relay_id", relayID, "client_id", clientID, "error", err)
+	_, _ = s.srtStore.RecordAudit(srtrelay.AuditEvent{
+		Type:     "configuration_apply_failed",
+		Level:    "error",
+		RelayID:  relayID,
+		ClientID: clientID,
+		Reason:   err.Error(),
+	})
+}
+
+func (s *Server) listSRTSessions(w http.ResponseWriter, r *http.Request) {
+	activeOnly := r.URL.Query().Get("active") == "true"
+	writeJSON(w, http.StatusOK, s.srtStore.ListSessions(activeOnly))
+}
+
+func (s *Server) listSRTAudit(w http.ResponseWriter, r *http.Request) {
+	events, err := s.srtStore.Audit(srtrelay.AuditFilter{
+		RelayID:  r.URL.Query().Get("relay_id"),
+		ClientID: r.URL.Query().Get("client_id"),
+		Type:     r.URL.Query().Get("type"),
+		Limit:    queryLimit(r),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, events)
+}
+
+func (s *Server) recordSRTOperatorAudit(r *http.Request, event srtrelay.AuditEvent) {
+	if user, ok := r.Context().Value(userContextKey).(auth.User); ok {
+		event.Actor = user.Username
+	}
+	if _, err := s.srtStore.RecordAudit(event); err != nil {
+		s.log.Error("write SRT audit", "event", event.Type, "error", err)
+	}
+}
+
 func (s *Server) web() http.Handler {
 	root, err := fs.Sub(embeddedWeb, "static")
 	if err != nil {
@@ -591,12 +881,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func writeSSE(w http.ResponseWriter, event streams.Event) error {
+func writeSSE(w http.ResponseWriter, eventType string, event any) error {
 	data, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "event: %s\n", event.Type); err != nil {
+	if _, err := fmt.Fprintf(w, "event: %s\n", eventType); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {

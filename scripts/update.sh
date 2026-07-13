@@ -6,6 +6,7 @@ BIN=/usr/local/bin/neotranscoder
 LIB=/usr/local/lib/neotranscoder
 STATE_DIR=/var/lib/neotranscoder
 BACKUP_DIR=$STATE_DIR/backups
+WORKER=$LIB/neotranscoder-srt-worker
 
 usage() {
   echo "usage: update.sh --file /path/neotranscoder [--sha256 HEX]" >&2
@@ -133,14 +134,38 @@ OLD_VERSION=$("$BIN" version 2>/dev/null || echo "unknown")
 NEW_VERSION=$("$TMP" version)
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 BACKUP="$BACKUP_DIR/neotranscoder.$STAMP"
+WORKER_BACKUP="$BACKUP_DIR/neotranscoder-srt-worker.$STAMP"
 
 cp "$BIN" "$BACKUP"
 chmod 0755 "$BACKUP"
 install -m 0755 "$TMP" "$BIN"
 
+WORKER_UPDATED=0
+if [ "$MODE" = "bundle" ] && [ -f "$SOURCE/neotranscoder-srt-worker" ]; then
+  chmod 0755 "$SOURCE/neotranscoder-srt-worker"
+  if ! "$SOURCE/neotranscoder-srt-worker" version >/dev/null 2>&1; then
+    install -m 0755 "$BACKUP" "$BIN"
+    echo "bundle SRT worker is not runnable on this host" >&2
+    exit 1
+  fi
+  if [ -f "$WORKER" ]; then
+    cp "$WORKER" "$WORKER_BACKUP"
+    chmod 0755 "$WORKER_BACKUP"
+  fi
+  install -m 0755 "$SOURCE/neotranscoder-srt-worker" "$WORKER"
+  WORKER_UPDATED=1
+fi
+
 if systemctl is-enabled "$SERVICE" >/dev/null 2>&1 || systemctl is-active "$SERVICE" >/dev/null 2>&1; then
   if ! systemctl restart "$SERVICE"; then
     install -m 0755 "$BACKUP" "$BIN"
+    if [ "$WORKER_UPDATED" -eq 1 ]; then
+      if [ -f "$WORKER_BACKUP" ]; then
+        install -m 0755 "$WORKER_BACKUP" "$WORKER"
+      else
+        rm -f "$WORKER"
+      fi
+    fi
     systemctl restart "$SERVICE" >/dev/null 2>&1 || true
     echo "update failed; rolled back to previous binary" >&2
     exit 1

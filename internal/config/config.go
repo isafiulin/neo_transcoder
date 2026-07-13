@@ -14,6 +14,7 @@ const DefaultPath = "/etc/neotranscoder/config.json"
 type Config struct {
 	Server  ServerConfig  `json:"server"`
 	FFmpeg  FFmpegConfig  `json:"ffmpeg"`
+	SRT     SRTConfig     `json:"srt"`
 	Storage StorageConfig `json:"storage"`
 	Logs    LogsConfig    `json:"logs"`
 }
@@ -71,6 +72,14 @@ type LogsConfig struct {
 	Path  string `json:"path"`
 }
 
+type SRTConfig struct {
+	WorkerPath         string `json:"worker_path"`
+	StatePath          string `json:"state_path"`
+	MasterKeyPath      string `json:"master_key_path"`
+	AuditDir           string `json:"audit_dir"`
+	AuditRetentionDays int    `json:"audit_retention_days"`
+}
+
 func Default() Config {
 	return Config{
 		Server: ServerConfig{
@@ -92,6 +101,13 @@ func Default() Config {
 				AnalyzeDuration: 10000000,
 				ProbeSize:       20000000,
 			},
+		},
+		SRT: SRTConfig{
+			WorkerPath:         "/usr/local/lib/neotranscoder/neotranscoder-srt-worker",
+			StatePath:          "/var/lib/neotranscoder/srt-state.json",
+			MasterKeyPath:      "/var/lib/neotranscoder/srt-master.key",
+			AuditDir:           "/var/log/neotranscoder/srt-audit",
+			AuditRetentionDays: 90,
 		},
 		Storage: StorageConfig{
 			Path: "/var/lib/neotranscoder/state.json",
@@ -134,6 +150,21 @@ func (c Config) Validate() error {
 	}
 	if c.FFmpeg.FFprobePath == "" {
 		return fmt.Errorf("ffmpeg.ffprobe_path is required")
+	}
+	if c.SRT.WorkerPath == "" {
+		return fmt.Errorf("srt.worker_path is required")
+	}
+	if c.SRT.StatePath == "" {
+		return fmt.Errorf("srt.state_path is required")
+	}
+	if c.SRT.MasterKeyPath == "" {
+		return fmt.Errorf("srt.master_key_path is required")
+	}
+	if c.SRT.AuditDir == "" {
+		return fmt.Errorf("srt.audit_dir is required")
+	}
+	if c.SRT.AuditRetentionDays < 1 {
+		return fmt.Errorf("srt.audit_retention_days must be greater than 0")
 	}
 	if c.Storage.Path == "" {
 		return fmt.Errorf("storage.path is required")
