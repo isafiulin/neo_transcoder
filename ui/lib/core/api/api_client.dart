@@ -372,6 +372,21 @@ class ApiClient {
         .toList();
   }
 
+  Future<void> clearSrtAudit({
+    String relayId = '',
+    String clientId = '',
+    String type = '',
+  }) async {
+    await _dio.delete<void>(
+      '/srt/audit',
+      queryParameters: <String, Object?>{
+        'relay_id': relayId,
+        'client_id': clientId,
+        'type': type,
+      },
+    );
+  }
+
   static const List<String> _sseEventTypes = <String>[
     'stream_saved',
     'stream_deleted',

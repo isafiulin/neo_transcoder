@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -91,6 +92,14 @@ func TestSRTAPIAuthAndCredentialLifecycle(t *testing.T) {
 	if len(audit) < 2 || audit[0].Actor != "admin" || audit[0].Type != "client_key_rotated" {
 		t.Fatalf("operator audit = %+v", audit)
 	}
+	response = request(t, httpServer, http.MethodDelete, "/api/srt/audit?client_id=partner-a", token, nil)
+	assertStatus(t, response, http.StatusNoContent)
+	response = request(t, httpServer, http.MethodGet, "/api/srt/audit?client_id=partner-a&limit=20", token, nil)
+	assertStatus(t, response, http.StatusOK)
+	decodeResponse(t, response, &audit)
+	if len(audit) != 1 || audit[0].Type != "audit_cleared" {
+		t.Fatalf("audit after clear = %+v", audit)
+	}
 
 	response = request(t, httpServer, http.MethodDelete, "/api/srt/clients/partner-a", token, nil)
 	assertStatus(t, response, http.StatusNoContent)
@@ -100,6 +109,31 @@ func TestSRTAPIAuthAndCredentialLifecycle(t *testing.T) {
 	if got := len(server.srtStore.ListRelays()); got != 0 {
 		t.Fatalf("relays after delete = %d", got)
 	}
+}
+
+func TestServerStartsWithUnavailableSRTStore(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Storage.Path = filepath.Join(dir, "state.json")
+	cfg.SRT.StatePath = filepath.Join(dir, "srt-state.json")
+	cfg.SRT.MasterKeyPath = filepath.Join(dir, "srt-master.key")
+	cfg.SRT.AuditDir = filepath.Join(dir, "audit")
+	cfg.SRT.WorkerPath = filepath.Join(dir, "missing-srt-worker")
+	if err := os.WriteFile(cfg.SRT.StatePath, []byte("{not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	token := loginToken(t, httpServer)
+	response := request(t, httpServer, http.MethodGet, "/api/srt/relays", token, nil)
+	assertStatus(t, response, http.StatusServiceUnavailable)
+	response = request(t, httpServer, http.MethodGet, "/api/streams", token, nil)
+	assertStatus(t, response, http.StatusOK)
 }
 
 func TestSRTAPIUnencryptedClientRequiresRestrictedACL(t *testing.T) {
@@ -147,9 +181,16 @@ func TestSRTAPICreatesPublishCallerWithOneTimeKey(t *testing.T) {
 	if created.Config.Direction != srtrelay.DirectionPublish || len(created.Passphrase) != 43 {
 		t.Fatalf("publish relay = %+v", created)
 	}
+	response = request(t, httpServer, http.MethodPost, "/api/srt/relays/partner-publish/rotate-key", token, nil)
+	assertStatus(t, response, http.StatusOK)
+	var rotated srtrelay.RelayView
+	decodeResponse(t, response, &rotated)
+	if rotated.Passphrase == created.Passphrase || rotated.Config.KeyVersion != created.Config.KeyVersion+1 {
+		t.Fatalf("rotated publish relay = %+v", rotated)
+	}
 	response = request(t, httpServer, http.MethodGet, "/api/srt/relays", token, nil)
 	body := readBody(t, response)
-	if bytes.Contains(body, []byte(created.Passphrase)) || bytes.Contains(body, []byte("passphrase")) {
+	if bytes.Contains(body, []byte(created.Passphrase)) || bytes.Contains(body, []byte(rotated.Passphrase)) || bytes.Contains(body, []byte("passphrase")) {
 		t.Fatalf("relay list leaked publish credential: %s", body)
 	}
 }

@@ -1315,6 +1315,36 @@ SRT_WORKER=dist/srt-worker-linux-amd64/neotranscoder-srt-worker \
 ./scripts/build-release.sh
 ```
 
+For the production server bundle, keep the top-level directory named
+`neotranscoder` so the deployment flow stays:
+
+```sh
+tar -xzf neotranscoder-linux-amd64.tar.gz
+cd neotranscoder
+```
+
+Build and archive it from macOS like this:
+
+```sh
+VERSION=0.1.0 \
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+SRT_WORKER=dist/srt-worker-linux-amd64/neotranscoder-srt-worker \
+OUT=dist/neotranscoder \
+./scripts/build-release.sh
+
+find dist/neotranscoder -name .DS_Store -delete
+xattr -cr dist/neotranscoder 2>/dev/null || true
+COPYFILE_DISABLE=1 tar --format ustar \
+  -C dist -czf dist/neotranscoder-linux-amd64.tar.gz neotranscoder
+shasum -a 256 dist/neotranscoder-linux-amd64.tar.gz \
+  > dist/neotranscoder-linux-amd64.tar.gz.sha256
+```
+
+`COPYFILE_DISABLE=1`, `--format ustar`, deleting `.DS_Store`, and clearing
+xattrs keep macOS/libarchive metadata out of the archive. Without that, GNU tar
+on Linux can print warnings such as
+`Ignoring unknown extended header keyword 'LIBARCHIVE.xattr...'`.
+
 On a Linux builder with libsrt development files, `BUILD_SRT=1` can build the
 worker directly. The static Docker path is preferred for a portable public
 release because it does not depend on the target host's libsrt/OpenSSL ABI.

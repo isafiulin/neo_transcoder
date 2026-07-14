@@ -211,6 +211,25 @@ class SrtCubit extends Cubit<SrtState> {
     }
   }
 
+  Future<void> clearAudit({
+    String relayId = '',
+    String clientId = '',
+    String type = '',
+  }) async {
+    _discardPendingAudit();
+    try {
+      await _repository.clearSrtAudit(
+        relayId: relayId,
+        clientId: clientId,
+        type: type,
+      );
+      _safeEmit(state.copyWith(audit: <SrtAuditEvent>[], error: ''));
+      await reloadAudit(relayId: relayId, clientId: clientId, type: type);
+    } on Object catch (error) {
+      _safeEmit(state.copyWith(error: '$error'));
+    }
+  }
+
   Future<void> _run(String id, Future<void> Function() operation) async {
     _safeEmit(
       state.copyWith(busyIds: <String>{...state.busyIds, id}, error: ''),

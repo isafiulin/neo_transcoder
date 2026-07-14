@@ -408,15 +408,15 @@ func (w *worker) acceptLoop(errors chan<- error) {
 			delete(w.pending, key)
 			w.reservations[attempt.clientID]--
 		}
-		clientID := attempt.clientID
 		if !authorized {
-			clientID, err = clientIDFromStreamID(streamID)
-			if err != nil {
-				w.mu.Unlock()
-				nativeClose(socket)
-				continue
-			}
+			w.mu.Unlock()
+			nativeClose(socket)
+			w.emitRejected(srtrelay.Session{
+				RemoteIP: remoteIP, RemotePort: remotePort, StreamID: streamID,
+			}, "SRT accept had no authorized pending handshake")
+			continue
 		}
+		clientID := attempt.clientID
 		sessionID, idErr := randomSessionID()
 		if idErr != nil {
 			w.mu.Unlock()
@@ -630,6 +630,13 @@ func (w *worker) emit(event srtrelay.WorkerEvent) bool {
 	case w.events <- event:
 		return true
 	default:
+		switch event.Type {
+		case "session_connected", "session_disconnected", "connection_rejected", "relay_error":
+			// ponytail: lifecycle events are small and rare; blocking here is
+			// cheaper than leaving daemon state permanently stale.
+			w.events <- event
+			return true
+		}
 		return false
 	}
 }

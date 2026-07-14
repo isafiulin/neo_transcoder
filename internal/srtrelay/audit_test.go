@@ -119,3 +119,30 @@ func TestAuditRetentionRemovesExpiredDailyFiles(t *testing.T) {
 		t.Fatalf("expired audit file still exists: %v", err)
 	}
 }
+
+func TestAuditClearRemovesMatchingRecords(t *testing.T) {
+	store, err := NewAuditStore(t.TempDir(), 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(AuditEvent{Type: "session_connected", RelayID: "relay-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(AuditEvent{Type: "session_connected", RelayID: "relay-b"}); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := store.Clear(AuditFilter{RelayID: "relay-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared != 1 {
+		t.Fatalf("cleared = %d, want 1", cleared)
+	}
+	events, err := store.List(AuditFilter{Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].RelayID != "relay-b" {
+		t.Fatalf("remaining audit events = %+v", events)
+	}
+}

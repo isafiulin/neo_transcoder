@@ -271,6 +271,16 @@ class _FakeSrtRepository implements SrtRepository {
   }) =>
       _load<List<SrtAuditEvent>>(List<SrtAuditEvent>.of(audit));
 
+  @override
+  Future<void> clearSrtAudit({
+    String relayId = '',
+    String clientId = '',
+    String type = '',
+  }) {
+    audit = <SrtAuditEvent>[];
+    return _operate();
+  }
+
   Future<T> _load<T>(T value) {
     if (loadError case final Object error) {
       return Future<T>.error(error);

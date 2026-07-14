@@ -33,5 +33,11 @@ abstract interface class SrtRepository {
     String type = '',
   });
 
+  Future<void> clearSrtAudit({
+    String relayId = '',
+    String clientId = '',
+    String type = '',
+  });
+
   Stream<ApiEvent> events();
 }

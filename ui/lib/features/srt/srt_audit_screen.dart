@@ -56,10 +56,21 @@ class _SrtAuditScreenState extends State<SrtAuditScreen> {
           children: <Widget>[
             Text('Connection audit',
                 style: Theme.of(context).textTheme.titleMedium),
-            NeoButton(
-              label: 'Refresh',
-              icon: Icons.refresh,
-              onPressed: _applyFilters,
+            Wrap(
+              spacing: NeoSpacing.md,
+              runSpacing: NeoSpacing.sm,
+              children: <Widget>[
+                NeoButton(
+                  label: 'Refresh',
+                  icon: Icons.refresh,
+                  onPressed: _applyFilters,
+                ),
+                NeoButton(
+                  label: 'Clear audit',
+                  icon: Icons.delete_sweep_outlined,
+                  onPressed: () => _confirmClear(context),
+                ),
+              ],
             ),
           ],
         ),
@@ -310,6 +321,40 @@ class _SrtAuditScreenState extends State<SrtAuditScreen> {
         clientId: _clientId,
         type: _type,
       );
+
+  Future<void> _confirmClear(BuildContext context) async {
+    final List<String> filters = <String>[
+      if (_relayId.isNotEmpty) 'relay $_relayId',
+      if (_clientId.isNotEmpty) 'client $_clientId',
+      if (_type.isNotEmpty) _eventLabel(_type).toLowerCase(),
+    ];
+    final String target =
+        filters.isEmpty ? 'all SRT audit records' : filters.join(', ');
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: const Text('Clear audit'),
+        content: Text('Delete stored audit records for $target?'),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed ?? false) {
+      await context.read<SrtCubit>().clearAudit(
+            relayId: _relayId,
+            clientId: _clientId,
+            type: _type,
+          );
+    }
+  }
 }
 
 class _AuditTableRow extends StatelessWidget {

@@ -270,6 +270,46 @@ func TestActiveSessionPreventsClientDeletion(t *testing.T) {
 	}
 }
 
+func TestCloseRelaySessionsClearsActiveSessions(t *testing.T) {
+	store := testStore(t)
+	createManagerRelayAndClient(t, store)
+	now := time.Now().UTC()
+	session := Session{
+		ID: "session-1", RelayID: "news-srt", ClientID: "partner-a",
+		RemoteIP: "203.0.113.10", ConnectedAt: now,
+	}
+	store.ApplyWorkerEvent("news-srt", WorkerEvent{Type: "session_connected", Session: &session})
+	closed := store.CloseRelaySessions("news-srt", "worker exited", now.Add(time.Second))
+	if len(closed) != 1 || closed[0].DisconnectedAt == nil || closed[0].DisconnectReason != "worker exited" {
+		t.Fatalf("closed sessions = %+v", closed)
+	}
+	if _, err := store.DeleteClient("partner-a"); err != nil {
+		t.Fatalf("delete after worker cleanup: %v", err)
+	}
+}
+
+func TestRotatePublishRelayKeyReturnsNewPassphrase(t *testing.T) {
+	store := testStore(t)
+	created, err := store.UpsertRelay(Relay{
+		ID: "publish-srt", Direction: DirectionPublish,
+		InputURL: "udp://239.1.1.10:1234", DestinationAddress: "203.0.113.50",
+		DestinationPort: 9000, StreamID: "channel-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := store.RotateRelayKey("publish-srt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rotated.Passphrase == "" || rotated.Passphrase == created.Passphrase || rotated.Config.KeyVersion != created.Config.KeyVersion+1 {
+		t.Fatalf("rotated relay = %+v created=%+v", rotated, created)
+	}
+	if _, err := store.RotateRelayKey("news-srt"); err == nil {
+		t.Fatal("listener relay key rotation unexpectedly succeeded")
+	}
+}
+
 func TestStoreRejectsCorruptStateAndMasterKey(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")

@@ -162,4 +162,12 @@ class TranscoderRepository implements DashboardRepository, SrtRepository {
     String type = '',
   }) =>
       _api.srtAudit(relayId: relayId, clientId: clientId, type: type);
+
+  @override
+  Future<void> clearSrtAudit({
+    String relayId = '',
+    String clientId = '',
+    String type = '',
+  }) =>
+      _api.clearSrtAudit(relayId: relayId, clientId: clientId, type: type);
 }

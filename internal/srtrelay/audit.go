@@ -87,17 +87,10 @@ func (s *AuditStore) List(filter AuditFilter) ([]AuditEvent, error) {
 	if filter.Limit < 1 || filter.Limit > 1000 {
 		filter.Limit = 200
 	}
-	entries, err := os.ReadDir(s.dir)
+	paths, err := s.pathsLocked()
 	if err != nil {
 		return nil, err
 	}
-	paths := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasPrefix(entry.Name(), "srt-audit-") && strings.HasSuffix(entry.Name(), ".jsonl") {
-			paths = append(paths, filepath.Join(s.dir, entry.Name()))
-		}
-	}
-	sort.Sort(sort.Reverse(sort.StringSlice(paths)))
 
 	result := make([]AuditEvent, 0, filter.Limit)
 	// ponytail: daily audit files are read newest-first. This is bounded by
@@ -115,6 +108,47 @@ func (s *AuditStore) List(filter AuditFilter) ([]AuditEvent, error) {
 		}
 	}
 	return result, nil
+}
+
+func (s *AuditStore) Clear(filter AuditFilter) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	paths, err := s.pathsLocked()
+	if err != nil {
+		return 0, err
+	}
+	if filter.RelayID == "" && filter.ClientID == "" && filter.Type == "" {
+		for _, path := range paths {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return 0, err
+			}
+		}
+		return len(paths), nil
+	}
+	cleared := 0
+	for _, path := range paths {
+		count, err := clearAuditFile(path, filter)
+		if err != nil {
+			return cleared, err
+		}
+		cleared += count
+	}
+	return cleared, nil
+}
+
+func (s *AuditStore) pathsLocked() ([]string, error) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), "srt-audit-") && strings.HasSuffix(entry.Name(), ".jsonl") {
+			paths = append(paths, filepath.Join(s.dir, entry.Name()))
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(paths)))
+	return paths, nil
 }
 
 func readAuditFile(path string, filter AuditFilter, limit int) ([]AuditEvent, error) {
@@ -153,6 +187,53 @@ func readAuditFile(path string, filter AuditFilter, limit int) ([]AuditEvent, er
 		result[index] = ring[position]
 	}
 	return result, nil
+}
+
+func clearAuditFile(path string, filter AuditFilter) (int, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".srt-audit-*.tmp")
+	if err != nil {
+		return 0, err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+
+	cleared := 0
+	kept := 0
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := append([]byte(nil), scanner.Bytes()...)
+		var event AuditEvent
+		if json.Unmarshal(line, &event) == nil && auditMatches(event, filter) {
+			cleared++
+			continue
+		}
+		if _, err := tmp.Write(append(line, '\n')); err != nil {
+			_ = tmp.Close()
+			return cleared, err
+		}
+		kept++
+	}
+	if err := scanner.Err(); err != nil {
+		_ = tmp.Close()
+		return cleared, err
+	}
+	if err := tmp.Close(); err != nil {
+		return cleared, err
+	}
+	if kept == 0 {
+		return cleared, os.Remove(path)
+	}
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		return cleared, err
+	}
+	return cleared, os.Rename(tmpName, path)
 }
 
 func auditMatches(event AuditEvent, filter AuditFilter) bool {

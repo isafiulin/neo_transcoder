@@ -65,6 +65,30 @@ func NewStore(statePath, masterKeyPath, auditDir string, auditRetentionDays int)
 	return store, nil
 }
 
+func NewEphemeralStore() (*Store, error) {
+	auditDir, err := os.MkdirTemp("", "neotranscoder-srt-audit-*")
+	if err != nil {
+		return nil, err
+	}
+	masterKey := make([]byte, 32)
+	if _, err := rand.Read(masterKey); err != nil {
+		return nil, err
+	}
+	audit, err := NewAuditStore(auditDir, 1)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{
+		masterKey:   masterKey,
+		relays:      make(map[string]Relay),
+		states:      make(map[string]RelayState),
+		clients:     make(map[string]Client),
+		sessions:    make(map[string]Session),
+		audit:       audit,
+		subscribers: make(map[chan Event]struct{}),
+	}, nil
+}
+
 func (s *Store) ListRelays() []RelayView {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -136,6 +160,30 @@ func (s *Store) PublishPassphrase(id string) string {
 	return s.relayPassphraseLocked(relay)
 }
 
+func (s *Store) RotateRelayKey(id string) (RelayView, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	relay, ok := s.relays[id]
+	if !ok {
+		return RelayView{}, fmt.Errorf("SRT relay not found")
+	}
+	if relay.Direction != DirectionPublish {
+		return RelayView{}, fmt.Errorf("SRT relay is not a publish relay")
+	}
+	if relay.EncryptionMode == EncryptionNone {
+		return RelayView{}, fmt.Errorf("SRT relay encryption is disabled")
+	}
+	relay.KeyVersion++
+	s.relays[id] = relay
+	if err := s.saveLocked(); err != nil {
+		return RelayView{}, err
+	}
+	now := time.Now().UTC()
+	view := RelayView{Config: relay, State: s.stateLocked(id), Passphrase: s.relayPassphraseLocked(relay)}
+	s.emitLocked(Event{Type: "srt_relay_key_rotated", RelayID: id, Time: now, Payload: view})
+	return view, nil
+}
+
 func (s *Store) DeleteRelay(id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -179,10 +227,21 @@ func (s *Store) GetClient(id string) (Client, bool) {
 }
 
 func (s *Store) UpsertClient(client Client) (ClientCredential, error) {
+	return s.upsertClient(client, false)
+}
+
+func (s *Store) CreateClient(client Client) (ClientCredential, error) {
+	return s.upsertClient(client, true)
+}
+
+func (s *Store) upsertClient(client Client, createOnly bool) (ClientCredential, error) {
 	now := time.Now().UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	existing, exists := s.clients[client.ID]
+	if createOnly && exists {
+		return ClientCredential{}, fmt.Errorf("SRT client already exists")
+	}
 	if exists {
 		client.CreatedAt = existing.CreatedAt
 		client.KeyVersion = existing.KeyVersion
@@ -300,8 +359,44 @@ func (s *Store) ListSessions(activeOnly bool) []Session {
 	return out
 }
 
+func (s *Store) CloseRelaySessions(relayID, reason string, at time.Time) []Session {
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	s.mu.Lock()
+	closed := make([]Session, 0)
+	for id, session := range s.sessions {
+		if session.RelayID != relayID || session.DisconnectedAt != nil {
+			continue
+		}
+		session.DisconnectedAt = &at
+		session.DisconnectReason = reason
+		s.sessions[id] = session
+		closed = append(closed, session)
+		s.emitLocked(Event{Type: "srt_session_disconnected", RelayID: relayID, ClientID: session.ClientID, Time: at, Payload: WorkerEvent{
+			Type: "session_disconnected", Time: at, Reason: reason, Session: &session,
+		}})
+	}
+	s.pruneSessionsLocked()
+	s.mu.Unlock()
+
+	for _, session := range closed {
+		_, _ = s.RecordAudit(AuditEvent{
+			Time: at, Type: "session_disconnected", Level: "warning",
+			RelayID: relayID, ClientID: session.ClientID, SessionID: session.ID,
+			RemoteIP: session.RemoteIP, RemotePort: session.RemotePort,
+			StreamID: session.StreamID, Reason: reason,
+		})
+	}
+	return closed
+}
+
 func (s *Store) Audit(filter AuditFilter) ([]AuditEvent, error) {
 	return s.audit.List(filter)
+}
+
+func (s *Store) ClearAudit(filter AuditFilter) (int, error) {
+	return s.audit.Clear(filter)
 }
 
 func (s *Store) RecordAudit(event AuditEvent) (AuditEvent, error) {

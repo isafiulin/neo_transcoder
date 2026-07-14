@@ -16,6 +16,7 @@ import (
 const (
 	restartWindow   = 5 * time.Minute
 	restartBackoff  = 5 * time.Second
+	flappingBackoff = 10 * time.Minute
 	maxRestarts     = 5
 	workerLineLimit = 1024 * 1024
 )
@@ -247,6 +248,7 @@ func (m *Manager) wait(id string, job *relayJob) {
 	m.mu.Unlock()
 
 	if stopping {
+		m.store.CloseRelaySessions(id, "SRT worker stopped", time.Now().UTC())
 		m.store.UpdateState(id, func(state RelayState) RelayState {
 			state.Status = "stopped"
 			state.PID = 0
@@ -259,6 +261,7 @@ func (m *Manager) wait(id string, job *relayJob) {
 	if err != nil {
 		reason = err.Error()
 	}
+	m.store.CloseRelaySessions(id, reason, time.Now().UTC())
 	m.store.UpdateState(id, func(state RelayState) RelayState {
 		state.Status = "error"
 		state.PID = 0
@@ -279,6 +282,7 @@ func (m *Manager) wait(id string, job *relayJob) {
 			state.LastError = "SRT worker exceeded restart limit"
 			return state
 		})
+		time.AfterFunc(flappingBackoff, func() { m.retryFlapping(id) })
 		return
 	}
 	m.store.UpdateState(id, func(state RelayState) RelayState {
@@ -290,6 +294,35 @@ func (m *Manager) wait(id string, job *relayJob) {
 			m.log.Error("SRT relay restart failed", "relay_id", id, "error", err)
 		}
 	})
+}
+
+func (m *Manager) retryFlapping(id string) {
+	view, exists := m.store.GetRelay(id)
+	if !exists || !view.Config.Enabled || view.State.Status != "flapping" {
+		return
+	}
+	m.mu.Lock()
+	delete(m.restarts, id)
+	_, running := m.jobs[id]
+	m.mu.Unlock()
+	if running {
+		return
+	}
+	m.store.UpdateState(id, func(state RelayState) RelayState {
+		state.Status = "restarting"
+		state.Flapping = false
+		return state
+	})
+	if err := m.start(id, true); err != nil {
+		m.log.Error("SRT relay flapping retry failed", "relay_id", id, "error", err)
+		m.store.UpdateState(id, func(state RelayState) RelayState {
+			state.Status = "flapping"
+			state.Flapping = true
+			state.LastError = err.Error()
+			return state
+		})
+		time.AfterFunc(flappingBackoff, func() { m.retryFlapping(id) })
+	}
 }
 
 func (m *Manager) allowRestart(id string, now time.Time) bool {
