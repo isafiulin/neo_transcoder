@@ -145,6 +145,17 @@ func TestListenerMinimumVersion(t *testing.T) {
 	}
 }
 
+func TestListenerEncryptionPolicyAllowsIPACLOnlyClients(t *testing.T) {
+	aes := srtrelay.WorkerClient{ID: "aes", EncryptionMode: srtrelay.EncryptionAES256}
+	none := srtrelay.WorkerClient{ID: "vlc", EncryptionMode: srtrelay.EncryptionNone}
+	if !listenerEnforcesEncryption([]srtrelay.WorkerClient{aes}) {
+		t.Fatal("AES-only listener should enforce encryption globally")
+	}
+	if listenerEnforcesEncryption([]srtrelay.WorkerClient{aes, none}) {
+		t.Fatal("mixed listener should allow unencrypted handshakes")
+	}
+}
+
 func TestNewWorkerValidatesPublishCredentialMode(t *testing.T) {
 	base := srtrelay.Relay{Direction: srtrelay.DirectionPublish, EncryptionMode: srtrelay.EncryptionAES256}
 	if _, err := newWorker(srtrelay.WorkerConfig{Relay: base, PublishPassphrase: "short"}); err == nil {

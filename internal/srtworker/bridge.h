@@ -16,8 +16,8 @@ typedef struct NeoSRTStats {
 int neo_srt_startup(char *error, int error_size);
 void neo_srt_cleanup(void);
 int neo_srt_listener_open(const char *bind_address, int port, int latency_ms,
-                          int payload_size, int minimum_version, uintptr_t handle,
-                          char *error, int error_size);
+                          int payload_size, int minimum_version, int enforce_encryption,
+                          uintptr_t handle, char *error, int error_size);
 int neo_srt_caller_open(const char *destination_address, int port,
                         int latency_ms, int payload_size,
                         const char *stream_id, const char *passphrase,

@@ -88,8 +88,8 @@ void neo_srt_cleanup(void) {
 }
 
 int neo_srt_listener_open(const char *bind_address, int port, int latency_ms,
-                          int payload_size, int minimum_version, uintptr_t handle,
-                          char *error, int error_size) {
+                          int payload_size, int minimum_version, int enforce_encryption,
+                          uintptr_t handle, char *error, int error_size) {
     SRTSOCKET socket = srt_create_socket();
     if (socket == SRT_INVALID_SOCK) {
         copy_error(error, error_size, srt_getlasterror_str());
@@ -103,7 +103,7 @@ int neo_srt_listener_open(const char *bind_address, int port, int latency_ms,
         set_option(socket, SRTO_PEERLATENCY, &latency_ms, sizeof(latency_ms), error, error_size) != 0 ||
         set_option(socket, SRTO_PAYLOADSIZE, &payload_size, sizeof(payload_size), error, error_size) != 0 ||
         set_option(socket, SRTO_MINVERSION, &minimum_version, sizeof(minimum_version), error, error_size) != 0 ||
-        set_option(socket, SRTO_ENFORCEDENCRYPTION, &enabled, sizeof(enabled), error, error_size) != 0) {
+        set_option(socket, SRTO_ENFORCEDENCRYPTION, &enforce_encryption, sizeof(enforce_encryption), error, error_size) != 0) {
         srt_close(socket);
         return -1;
     }

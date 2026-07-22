@@ -47,9 +47,13 @@ func nativeCleanup() {
 	C.neo_srt_cleanup()
 }
 
-func nativeOpenListener(bindAddress string, port, latencyMS, payloadSize, minimumVersion int, handle uintptr) (int, error) {
+func nativeOpenListener(bindAddress string, port, latencyMS, payloadSize, minimumVersion int, enforceEncryption bool, handle uintptr) (int, error) {
 	address := C.CString(bindAddress)
 	defer C.free(unsafe.Pointer(address))
+	enforced := C.int(0)
+	if enforceEncryption {
+		enforced = 1
+	}
 	errorBuffer := make([]byte, 512)
 	socket := C.neo_srt_listener_open(
 		address,
@@ -57,6 +61,7 @@ func nativeOpenListener(bindAddress string, port, latencyMS, payloadSize, minimu
 		C.int(latencyMS),
 		C.int(payloadSize),
 		C.int(minimumVersion),
+		enforced,
 		C.uintptr_t(handle),
 		(*C.char)(unsafe.Pointer(&errorBuffer[0])),
 		C.int(len(errorBuffer)),

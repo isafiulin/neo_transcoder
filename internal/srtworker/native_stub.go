@@ -10,7 +10,7 @@ func nativeStartup() error {
 
 func nativeCleanup() {}
 
-func nativeOpenListener(string, int, int, int, int, uintptr) (int, error) {
+func nativeOpenListener(string, int, int, int, int, bool, uintptr) (int, error) {
 	return -1, fmt.Errorf("SRT worker was built without libsrt support")
 }
 

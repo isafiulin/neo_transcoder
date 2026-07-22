@@ -136,7 +136,8 @@ func Run(ctx context.Context, config srtrelay.WorkerConfig, stdout, stderr io.Wr
 	} else {
 		endpoint, err = nativeOpenListener(
 			config.Relay.BindAddress, config.Relay.Port, config.Relay.LatencyMS,
-			config.Relay.PayloadSize, listenerMinimumVersion(config.Relay), w.handle,
+			config.Relay.PayloadSize, listenerMinimumVersion(config.Relay),
+			listenerEnforcesEncryption(config.Clients), w.handle,
 		)
 		if err != nil {
 			return fmt.Errorf("SRT listener: %w", err)
@@ -191,6 +192,17 @@ func listenerMinimumVersion(relay srtrelay.Relay) int {
 		return 0x010000
 	}
 	return 0x010300
+}
+
+func listenerEnforcesEncryption(clients []srtrelay.WorkerClient) bool {
+	for _, client := range clients {
+		if client.EncryptionMode == srtrelay.EncryptionNone {
+			// ponytail: one listener can serve AES and IP-ACL-only clients.
+			// Encrypted clients are still enforced on the accepted child socket.
+			return false
+		}
+	}
+	return true
 }
 
 func newWorker(config srtrelay.WorkerConfig) (*worker, error) {
