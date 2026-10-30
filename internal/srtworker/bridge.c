@@ -172,7 +172,6 @@ int neo_srt_caller_open(const char *destination_address, int port,
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
-    hints.ai_flags = AI_NUMERICHOST;
     struct addrinfo *addresses = NULL;
     int gai_error = getaddrinfo(destination_address, service, &hints, &addresses);
     if (gai_error != 0) {
@@ -180,6 +179,8 @@ int neo_srt_caller_open(const char *destination_address, int port,
         srt_close(socket);
         return -1;
     }
+    /* ponytail: one connection to the first DNS result; add sequential address
+       fallback here if needed. Each worker restart resolves the host again. */
     if (srt_connect(socket, addresses->ai_addr, (int)addresses->ai_addrlen) == SRT_ERROR) {
         copy_error(error, error_size, srt_getlasterror_str());
         freeaddrinfo(addresses);

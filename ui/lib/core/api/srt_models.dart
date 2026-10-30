@@ -325,9 +325,20 @@ class SrtAuditEvent {
     required this.streamId,
     required this.reason,
     required this.actor,
+    required this.peerVersion,
+    required this.encrypted,
+    required this.connectedAt,
+    required this.disconnectedAt,
+    required this.durationSeconds,
+    required this.causeHint,
+    required this.originHint,
+    required this.stats,
+    required this.details,
   });
 
   factory SrtAuditEvent.fromJson(Map<String, dynamic> json) {
+    final Map<String, dynamic> details =
+        json['details'] as Map<String, dynamic>? ?? <String, dynamic>{};
     return SrtAuditEvent(
       id: json['id'] as String? ?? '',
       time: json['time'] as String? ?? '',
@@ -341,6 +352,17 @@ class SrtAuditEvent {
       streamId: json['stream_id'] as String? ?? '',
       reason: json['reason'] as String? ?? '',
       actor: json['actor'] as String? ?? '',
+      peerVersion: details['peer_version'] as String? ?? '',
+      encrypted: details['encrypted'] as bool? ?? false,
+      connectedAt: details['connected_at'] as String? ?? '',
+      disconnectedAt: details['disconnected_at'] as String? ?? '',
+      durationSeconds: (details['duration_seconds'] as num?)?.toInt() ?? 0,
+      causeHint: details['cause_hint'] as String? ?? '',
+      originHint: details['origin_hint'] as String? ?? '',
+      stats: SrtSessionStats.fromJson(
+        details['stats'] as Map<String, dynamic>? ?? <String, dynamic>{},
+      ),
+      details: details,
     );
   }
 
@@ -356,4 +378,13 @@ class SrtAuditEvent {
   final String streamId;
   final String reason;
   final String actor;
+  final String peerVersion;
+  final bool encrypted;
+  final String connectedAt;
+  final String disconnectedAt;
+  final int durationSeconds;
+  final String causeHint;
+  final String originHint;
+  final SrtSessionStats stats;
+  final Map<String, dynamic> details;
 }

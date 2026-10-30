@@ -120,4 +120,45 @@ void main() {
     expect(connected.srtSession?.id, 'srt_1');
     expect(connected.srtSession?.encrypted, isTrue);
   });
+
+  test('SrtAuditEvent parses diagnostic details', () {
+    final SrtAuditEvent event = SrtAuditEvent.fromJson(<String, dynamic>{
+      'id': 'audit-1',
+      'time': '2026-07-24T06:28:45Z',
+      'type': 'session_disconnected',
+      'level': 'info',
+      'relay_id': 'gagsnetwork',
+      'client_id': 'lifestream',
+      'session_id': 'srt_1',
+      'remote_ip': '212.112.101.92',
+      'remote_port': 44640,
+      'reason': 'SRT send failed: Connection was broken',
+      'details': <String, dynamic>{
+        'peer_version': '1.5.4',
+        'encrypted': false,
+        'connected_at': '2026-07-24T06:20:00Z',
+        'disconnected_at': '2026-07-24T06:28:45Z',
+        'duration_seconds': 525,
+        'cause_hint': 'peer closed the SRT connection',
+        'origin_hint': 'remote_or_network',
+        'stats': <String, dynamic>{
+          'bytes_sent': 1048576,
+          'packets_sent': 800,
+          'packets_lost': 2,
+          'packets_retransmitted': 1,
+          'packets_dropped': 3,
+          'bitrate_bps': 4000000,
+          'rtt_ms': 42.5,
+          'latency_ms': 800,
+        },
+      },
+    });
+
+    expect(event.peerVersion, '1.5.4');
+    expect(event.encrypted, isFalse);
+    expect(event.durationSeconds, 525);
+    expect(event.causeHint, contains('peer closed'));
+    expect(event.originHint, 'remote_or_network');
+    expect(event.stats.packetsDropped, 3);
+  });
 }

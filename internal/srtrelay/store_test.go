@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -151,11 +152,11 @@ func TestPublishRelayCredentialAndValidation(t *testing.T) {
 	}
 	_, err = store.UpsertRelay(Relay{
 		ID: "bad-publish", Direction: DirectionPublish,
-		InputURL: "udp://239.1.1.31:1234", DestinationAddress: "partner.example",
+		InputURL: "udp://239.1.1.31:1234", DestinationAddress: "srt://partner.example:9000",
 		DestinationPort: 9000, StreamID: "channel-2", EncryptionMode: EncryptionNone,
 	})
 	if err == nil {
-		t.Fatal("publish relay accepted a non-literal destination")
+		t.Fatal("publish relay accepted a URL instead of a destination host")
 	}
 	_, err = store.UpsertClient(Client{
 		ID: "invalid-client", AllowedRelayIDs: []string{"partner-publish"},
@@ -163,6 +164,25 @@ func TestPublishRelayCredentialAndValidation(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("listener client was assigned to a publish relay")
+	}
+}
+
+func TestPublishRelayDestinationHost(t *testing.T) {
+	for _, address := range []string{"203.0.113.50", "2001:db8::1", "src-ugc.strm.yandex.net", "partner.example.", " localhost "} {
+		relay, err := normalizeRelay(Relay{ID: "dns-test", Direction: DirectionPublish,
+			InputURL: "udp://239.1.1.31:1234", DestinationAddress: address,
+			DestinationPort: 5000, StreamID: "channel-1"})
+		if err != nil || relay.DestinationAddress != strings.TrimSpace(address) {
+			t.Errorf("destination %q: relay=%+v error=%v", address, relay, err)
+		}
+	}
+	for _, address := range []string{"", "srt://partner.example", "partner.example:5000", "a/b", "a?b", "a@b", "a..b", "-a.example", "a-.example", "a_b.example", "a\x00b", strings.Repeat("a", 64) + ".example", strings.Repeat("abcd.", 51) + "com"} {
+		_, err := normalizeRelay(Relay{ID: "dns-test", Direction: DirectionPublish,
+			InputURL: "udp://239.1.1.31:1234", DestinationAddress: address,
+			DestinationPort: 5000, StreamID: "channel-1"})
+		if err == nil {
+			t.Errorf("accepted invalid destination %q", address)
+		}
 	}
 }
 
@@ -307,6 +327,16 @@ func TestRotatePublishRelayKeyReturnsNewPassphrase(t *testing.T) {
 	}
 	if _, err := store.RotateRelayKey("news-srt"); err == nil {
 		t.Fatal("listener relay key rotation unexpectedly succeeded")
+	}
+}
+
+func TestDisconnectCauseHintClassifiesBrokenSend(t *testing.T) {
+	hint := disconnectCauseHint("SRT send failed: Connection was broken")
+	if hint == "" || !strings.Contains(hint, "peer closed") {
+		t.Fatalf("disconnect hint = %q", hint)
+	}
+	if origin := disconnectOriginHint("SRT send failed: Connection was broken"); origin != "remote_or_network" {
+		t.Fatalf("disconnect origin = %q", origin)
 	}
 }
 

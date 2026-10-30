@@ -213,9 +213,25 @@ class _SrtAuditScreenState extends State<SrtAuditScreen> {
                   const SizedBox(height: NeoSpacing.sm),
                   Text(event.reason),
                 ],
+                if (event.causeHint.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: NeoSpacing.sm),
+                  Text(event.causeHint,
+                      style: Theme.of(context).textTheme.labelMedium),
+                ],
                 const SizedBox(height: NeoSpacing.sm),
-                Text(formatTimestamp(event.time),
-                    style: Theme.of(context).textTheme.labelMedium),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(formatTimestamp(event.time),
+                          style: Theme.of(context).textTheme.labelMedium),
+                    ),
+                    TextButton.icon(
+                      onPressed: () => _showDetails(context, event),
+                      icon: const Icon(Icons.info_outline, size: 18),
+                      label: const Text('Details'),
+                    ),
+                  ],
+                ),
               ],
             ),
           );
@@ -234,8 +250,9 @@ class _SrtAuditScreenState extends State<SrtAuditScreen> {
       190,
       180,
       310,
+      72,
     ];
-    const double tableWidth = 1388;
+    const double tableWidth = 1460;
     return NeoPanel(
       child: Scrollbar(
         controller: _horizontal,
@@ -260,6 +277,7 @@ class _SrtAuditScreenState extends State<SrtAuditScreen> {
                     Text('Remote address'),
                     Text('Stream ID'),
                     Text('Reason / actor'),
+                    Text('Details'),
                   ],
                 ),
                 const Divider(height: 1),
@@ -296,10 +314,22 @@ class _SrtAuditScreenState extends State<SrtAuditScreen> {
                                 : '${event.remoteIp}:${event.remotePort}'),
                             Text(event.streamId),
                             Tooltip(
-                              message: reason,
+                              message: event.causeHint.isEmpty
+                                  ? reason
+                                  : '$reason\n${event.causeHint}',
                               child: Text(
-                                reason,
+                                event.causeHint.isEmpty
+                                    ? reason
+                                    : '$reason • ${event.causeHint}',
                                 overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: IconButton(
+                                tooltip: 'Audit details',
+                                icon: const Icon(Icons.info_outline, size: 18),
+                                onPressed: () => _showDetails(context, event),
                               ),
                             ),
                           ],
@@ -323,6 +353,7 @@ class _SrtAuditScreenState extends State<SrtAuditScreen> {
       );
 
   Future<void> _confirmClear(BuildContext context) async {
+    final SrtCubit cubit = context.read<SrtCubit>();
     final List<String> filters = <String>[
       if (_relayId.isNotEmpty) 'relay $_relayId',
       if (_clientId.isNotEmpty) 'client $_clientId',
@@ -348,13 +379,113 @@ class _SrtAuditScreenState extends State<SrtAuditScreen> {
       ),
     );
     if (confirmed ?? false) {
-      await context.read<SrtCubit>().clearAudit(
-            relayId: _relayId,
-            clientId: _clientId,
-            type: _type,
-          );
+      await cubit.clearAudit(
+        relayId: _relayId,
+        clientId: _clientId,
+        type: _type,
+      );
     }
   }
+
+  Future<void> _showDetails(BuildContext context, SrtAuditEvent event) async {
+    final List<_AuditDetail> details = <_AuditDetail>[
+      _AuditDetail('Event ID', event.id),
+      _AuditDetail('Session ID', event.sessionId),
+      _AuditDetail('Time', formatTimestamp(event.time)),
+      _AuditDetail('Relay', event.relayId),
+      _AuditDetail('Client', event.clientId),
+      _AuditDetail(
+          'Remote',
+          event.remoteIp.isEmpty
+              ? ''
+              : '${event.remoteIp}:${event.remotePort}'),
+      _AuditDetail('Stream ID', event.streamId),
+      _AuditDetail('Peer version', event.peerVersion),
+      _AuditDetail(
+          'Encryption',
+          event.details.containsKey('encrypted')
+              ? (event.encrypted ? 'AES secured' : 'No')
+              : ''),
+      _AuditDetail('Connected at',
+          event.connectedAt.isEmpty ? '' : formatTimestamp(event.connectedAt)),
+      _AuditDetail(
+          'Disconnected at',
+          event.disconnectedAt.isEmpty
+              ? ''
+              : formatTimestamp(event.disconnectedAt)),
+      _AuditDetail('Duration', _formatDuration(event.durationSeconds)),
+      _AuditDetail('Reason', event.reason),
+      _AuditDetail('Cause hint', event.causeHint),
+      _AuditDetail('Origin hint', _originLabel(event.originHint)),
+      _AuditDetail('Actor', event.actor),
+      _AuditDetail('Bytes sent', _formatCount(event.stats.bytesSent)),
+      _AuditDetail('Packets sent', _formatCount(event.stats.packetsSent)),
+      _AuditDetail('Lost packets', _formatCount(event.stats.packetsLost)),
+      _AuditDetail(
+          'Retransmitted', _formatCount(event.stats.packetsRetransmitted)),
+      _AuditDetail('Dropped packets', _formatCount(event.stats.packetsDropped)),
+      _AuditDetail(
+          'Bitrate',
+          event.stats.bitrateBps == 0
+              ? ''
+              : formatBitrate(event.stats.bitrateBps)),
+      _AuditDetail(
+          'RTT',
+          event.stats.rttMs == 0
+              ? ''
+              : '${event.stats.rttMs.toStringAsFixed(1)} ms'),
+      _AuditDetail('Latency',
+          event.stats.latencyMs == 0 ? '' : '${event.stats.latencyMs} ms'),
+    ].where((_AuditDetail item) => item.value.isNotEmpty).toList();
+
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: Text(_eventLabel(event.type)),
+        content: SizedBox(
+          width: 560,
+          child: SingleChildScrollView(
+            child: SelectionArea(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: details
+                    .map((_AuditDetail item) => Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 5),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              SizedBox(
+                                width: 140,
+                                child: Text(item.label,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w600)),
+                              ),
+                              Expanded(child: Text(item.value)),
+                            ],
+                          ),
+                        ))
+                    .toList(),
+              ),
+            ),
+          ),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AuditDetail {
+  const _AuditDetail(this.label, this.value);
+
+  final String label;
+  final String value;
 }
 
 class _AuditTableRow extends StatelessWidget {
@@ -408,3 +539,28 @@ String _eventLabel(String value) => value
     .map((String word) =>
         word.isEmpty ? word : '${word[0].toUpperCase()}${word.substring(1)}')
     .join(' ');
+
+String _formatDuration(int seconds) {
+  if (seconds <= 0) {
+    return '';
+  }
+  final int hours = seconds ~/ 3600;
+  final int minutes = (seconds % 3600) ~/ 60;
+  final int remaining = seconds % 60;
+  if (hours > 0) {
+    return '${hours}h ${minutes}m ${remaining}s';
+  }
+  if (minutes > 0) {
+    return '${minutes}m ${remaining}s';
+  }
+  return '${remaining}s';
+}
+
+String _formatCount(int value) => value == 0 ? '' : value.toString();
+
+String _originLabel(String value) => switch (value) {
+      'local' => 'Local worker/server',
+      'remote_or_network' => 'Remote peer or network path',
+      'unknown' => 'Unknown',
+      _ => '',
+    };

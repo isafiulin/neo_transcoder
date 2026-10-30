@@ -22,6 +22,7 @@ import (
 )
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$`)
+var hostnamePattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.?$`)
 
 type Store struct {
 	mu          sync.RWMutex
@@ -643,8 +644,10 @@ func normalizeRelay(relay Relay) (Relay, error) {
 	if relay.Direction == DirectionPublish {
 		relay.AllowMissingStreamID = false
 		relay.DefaultClientID = ""
-		if net.ParseIP(relay.DestinationAddress) == nil {
-			return Relay{}, fmt.Errorf("destination_address must be an IP address")
+		relay.DestinationAddress = strings.TrimSpace(relay.DestinationAddress)
+		if net.ParseIP(relay.DestinationAddress) == nil &&
+			(len(strings.TrimSuffix(relay.DestinationAddress, ".")) > 253 || !hostnamePattern.MatchString(relay.DestinationAddress)) {
+			return Relay{}, fmt.Errorf("destination_address must be an IP address or DNS hostname (without scheme or port)")
 		}
 		if relay.DestinationPort < 1 || relay.DestinationPort > 65535 {
 			return Relay{}, fmt.Errorf("destination_port must be between 1 and 65535")
@@ -890,6 +893,27 @@ func auditFromWorkerEvent(relayID string, event WorkerEvent, now time.Time) (Aud
 	if event.Session != nil {
 		session = *event.Session
 	}
+	details := map[string]any{
+		"peer_version": session.PeerVersion,
+		"encrypted":    session.Encrypted,
+		"stats":        session.Stats,
+	}
+	if !session.ConnectedAt.IsZero() {
+		details["connected_at"] = session.ConnectedAt
+	}
+	if session.DisconnectedAt != nil {
+		details["disconnected_at"] = *session.DisconnectedAt
+		if !session.ConnectedAt.IsZero() {
+			details["duration_seconds"] = int(session.DisconnectedAt.Sub(session.ConnectedAt).Seconds())
+		}
+	}
+	if session.DisconnectReason != "" {
+		details["disconnect_reason"] = session.DisconnectReason
+	}
+	if event.Type == "session_disconnected" {
+		details["cause_hint"] = disconnectCauseHint(event.Reason)
+		details["origin_hint"] = disconnectOriginHint(event.Reason)
+	}
 	return AuditEvent{
 		Time:       now,
 		Type:       event.Type,
@@ -901,12 +925,33 @@ func auditFromWorkerEvent(relayID string, event WorkerEvent, now time.Time) (Aud
 		RemotePort: session.RemotePort,
 		StreamID:   session.StreamID,
 		Reason:     event.Reason,
-		Details: map[string]any{
-			"peer_version": session.PeerVersion,
-			"encrypted":    session.Encrypted,
-			"stats":        session.Stats,
-		},
+		Details:    details,
 	}, true
+}
+
+func disconnectCauseHint(reason string) string {
+	switch {
+	case strings.Contains(reason, "Connection was broken"):
+		return "peer closed the SRT connection or the network path broke while sending"
+	case strings.Contains(reason, "send queue remained full"):
+		return "receiver was too slow; worker dropped packets until the send queue stayed full"
+	case strings.Contains(reason, "relay stopped"):
+		return "local relay worker was stopped or restarted"
+	default:
+		return ""
+	}
+}
+
+func disconnectOriginHint(reason string) string {
+	switch {
+	case strings.Contains(reason, "Connection was broken"):
+		return "remote_or_network"
+	case strings.Contains(reason, "send queue remained full"),
+		strings.Contains(reason, "relay stopped"):
+		return "local"
+	default:
+		return "unknown"
+	}
 }
 
 func sortedKeys[T any](items map[string]T) []string {

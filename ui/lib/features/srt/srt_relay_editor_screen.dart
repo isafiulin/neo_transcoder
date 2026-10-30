@@ -271,8 +271,8 @@ class _SrtRelayEditorScreenState extends State<SrtRelayEditorScreen> {
           ] else ...<Widget>[
             _field(
               controller: _destination,
-              label: 'Partner destination IP',
-              hint: '203.0.113.50',
+              label: 'Partner destination IP or domain',
+              hint: 'src-ugc.strm.yandex.net',
               validator: _required,
             ),
             const SizedBox(height: NeoSpacing.md),
