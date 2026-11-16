@@ -10,6 +10,7 @@ import (
 
 func TestBroadcastDisconnectsPersistentlySlowClient(t *testing.T) {
 	worker := &worker{
+		config:   srtrelay.WorkerConfig{Relay: srtrelay.Relay{PayloadSize: 1316}},
 		events:   make(chan srtrelay.WorkerEvent, 1024),
 		sessions: make(map[string]*clientSession),
 	}
@@ -45,6 +46,7 @@ func TestBroadcastDisconnectsPersistentlySlowClient(t *testing.T) {
 
 func TestSessionCloseIsIdempotentUnderConcurrentFailures(t *testing.T) {
 	worker := &worker{
+		config:   srtrelay.WorkerConfig{Relay: srtrelay.Relay{PayloadSize: 1316}},
 		events:   make(chan srtrelay.WorkerEvent, 10),
 		sessions: make(map[string]*clientSession),
 	}

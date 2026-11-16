@@ -235,12 +235,20 @@ int neo_srt_accept(int listener, char *remote_ip, int remote_ip_size,
     return socket;
 }
 
-int neo_srt_send(int socket, const char *data, int size,
-                 char *error, int error_size) {
-    int sent = srt_sendmsg(socket, data, size, -1, 1);
-    if (sent == SRT_ERROR || sent != size) {
-        copy_error(error, error_size, srt_getlasterror_str());
+int neo_srt_send_batch(int socket, const char *data, int size, int payload_size,
+                       char *error, int error_size) {
+    if (payload_size <= 0 || size < 0 || size % payload_size != 0) {
+        copy_error(error, error_size, "invalid SRT batch size");
         return -1;
+    }
+    /* One Go/C transition, but one SRT message per payload. Never send a
+       multi-packet batch as a single message in SRT live mode. */
+    for (int offset = 0; offset < size; offset += payload_size) {
+        int sent = srt_sendmsg(socket, data + offset, payload_size, -1, 1);
+        if (sent == SRT_ERROR || sent != payload_size) {
+            copy_error(error, error_size, srt_getlasterror_str());
+            return -1;
+        }
     }
     return 0;
 }

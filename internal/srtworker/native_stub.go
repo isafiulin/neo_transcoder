@@ -22,7 +22,7 @@ func nativeAccept(int) (int, string, int, string, string, bool, error) {
 	return -1, "", 0, "", "", false, fmt.Errorf("SRT worker was built without libsrt support")
 }
 
-func nativeSend(int, []byte) error {
+func nativeSendBatch(int, []byte, int, []byte) error {
 	return fmt.Errorf("SRT worker was built without libsrt support")
 }
 

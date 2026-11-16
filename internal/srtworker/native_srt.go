@@ -112,15 +112,14 @@ func nativeAccept(listener int) (int, string, int, string, string, bool, error) 
 	return int(socket), cString(remoteIP), int(remotePort), cString(streamID), cString(peerVersion), encrypted != 0, nil
 }
 
-func nativeSend(socket int, data []byte) error {
+func nativeSendBatch(socket int, data []byte, payloadSize int, errorBuffer []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
-	errorBuffer := make([]byte, 512)
-	if C.neo_srt_send(
+	if C.neo_srt_send_batch(
 		C.int(socket),
 		(*C.char)(unsafe.Pointer(&data[0])),
-		C.int(len(data)),
+		C.int(len(data)), C.int(payloadSize),
 		(*C.char)(unsafe.Pointer(&errorBuffer[0])),
 		C.int(len(errorBuffer)),
 	) != 0 {

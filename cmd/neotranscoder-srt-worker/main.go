@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 
 	"neotranscoder/internal/buildinfo"
@@ -28,6 +29,11 @@ func main() {
 	if err := decoder.Decode(&config); err != nil {
 		fmt.Fprintln(os.Stderr, "read worker config:", err)
 		os.Exit(2)
+	}
+	if os.Getenv("GOMAXPROCS") == "" {
+		// One worker runs per relay; with the default (all cores) dozens of
+		// workers each spin up idle Ps and fight over the scheduler.
+		runtime.GOMAXPROCS(2)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

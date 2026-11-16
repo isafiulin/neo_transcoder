@@ -69,15 +69,16 @@ type attemptWindow struct {
 }
 
 type clientSession struct {
-	worker    *worker
-	socket    int
-	queue     chan []byte
-	done      chan struct{}
-	closeOnce sync.Once
-	data      srtrelay.Session
-	dropBurst atomic.Int64
-	appDrops  atomic.Int64
-	fatal     chan<- error
+	worker        *worker
+	socket        int
+	queue         chan []byte
+	done          chan struct{}
+	closeOnce     sync.Once
+	data          srtrelay.Session
+	dropBurst     atomic.Int64
+	appDrops      atomic.Int64
+	queuedPackets atomic.Int64
+	fatal         chan<- error
 }
 
 func Run(ctx context.Context, config srtrelay.WorkerConfig, stdout, stderr io.Writer) error {
@@ -464,13 +465,24 @@ func (w *worker) acceptLoop(errors chan<- error) {
 func (w *worker) inputLoop(errors chan<- error) {
 	defer w.wg.Done()
 	buffer := make([]byte, 65535)
-	pending := make([]byte, 0, w.config.Relay.PayloadSize*2)
+	batches := newPacketBatcher(w.config.Relay.PayloadSize)
 	continuity := newContinuityTracker()
+	var deadline time.Time
 	for {
-		count, _, err := w.input.ReadFromUDP(buffer)
+		// ReadFromUDPAddrPort avoids allocating an unused source IP per datagram.
+		count, _, err := w.input.ReadFromUDPAddrPort(buffer)
 		if err != nil {
 			if w.isStopping() {
 				return
+			}
+			if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+				batches.flush(w.broadcast)
+				deadline = time.Time{}
+				if err := w.input.SetReadDeadline(deadline); err != nil {
+					errors <- fmt.Errorf("multicast deadline: %w", err)
+					return
+				}
+				continue
 			}
 			errors <- fmt.Errorf("multicast read: %w", err)
 			return
@@ -479,52 +491,73 @@ func (w *worker) inputLoop(errors chan<- error) {
 		w.inputPackets.Add(int64(count / 188))
 		w.lastInputAt.Store(time.Now().UnixNano())
 		w.continuityError.Add(continuity.observe(buffer[:count]))
-		pending = append(pending, buffer[:count]...)
-		for len(pending) >= w.config.Relay.PayloadSize {
-			packet := append([]byte(nil), pending[:w.config.Relay.PayloadSize]...)
-			pending = pending[w.config.Relay.PayloadSize:]
-			w.broadcast(packet)
+		batches.append(buffer[:count], w.broadcast)
+		nextDeadline := deadline
+		if len(batches.pending) == 0 {
+			nextDeadline = time.Time{}
+		} else if deadline.IsZero() {
+			nextDeadline = time.Now().Add(sendBatchDelay)
 		}
-		if cap(pending) > w.config.Relay.PayloadSize*8 {
-			pending = append(make([]byte, 0, w.config.Relay.PayloadSize*2), pending...)
+		if nextDeadline != deadline {
+			deadline = nextDeadline
+			if err := w.input.SetReadDeadline(deadline); err != nil {
+				errors <- fmt.Errorf("multicast deadline: %w", err)
+				return
+			}
 		}
 	}
 }
 
-func (w *worker) broadcast(packet []byte) {
+func (w *worker) broadcast(batch []byte) {
+	packets := int64(len(batch) / w.config.Relay.PayloadSize)
+	// All queue operations are nonblocking. Keep the read lock instead of
+	// allocating a session snapshot for every packet/batch.
 	w.mu.RLock()
-	sessions := make([]*clientSession, 0, len(w.sessions))
+	defer w.mu.RUnlock()
 	for _, session := range w.sessions {
-		sessions = append(sessions, session)
-	}
-	w.mu.RUnlock()
-	for _, session := range sessions {
 		select {
 		case <-session.done:
 			continue
 		default:
 		}
-		select {
-		case session.queue <- packet:
-			session.dropBurst.Store(0)
-		case <-session.done:
-		default:
-			session.appDrops.Add(1)
-			if session.dropBurst.Add(1) == maxQueueDropBurst {
-				go session.close("client send queue remained full")
+		// Bound queued packets, not batches: preserve the 512-packet memory ceiling.
+		if session.queuedPackets.Add(packets) <= sessionQueueSize {
+			select {
+			case session.queue <- batch:
+				session.dropBurst.Store(0)
+				continue
+			case <-session.done:
+				session.queuedPackets.Add(-packets)
+				continue
+			default:
 			}
+		}
+		session.queuedPackets.Add(-packets)
+		session.appDrops.Add(packets)
+		dropped := session.dropBurst.Add(packets)
+		if dropped >= maxQueueDropBurst && dropped-packets < maxQueueDropBurst {
+			go session.close("client send queue remained full")
 		}
 	}
 }
 
 func (session *clientSession) sendLoop() {
 	defer session.worker.wg.Done()
+	// Reuse the C error buffer rather than allocate it for every SRT packet.
+	errorBuffer := make([]byte, 512)
+	payloadSize := session.worker.config.Relay.PayloadSize
 	for {
 		select {
 		case <-session.done:
 			return
-		case packet := <-session.queue:
-			if err := nativeSend(session.socket, packet); err != nil {
+		case batch := <-session.queue:
+			session.queuedPackets.Add(-int64(len(batch) / payloadSize))
+			select {
+			case <-session.done:
+				return
+			default:
+			}
+			if err := nativeSendBatch(session.socket, batch, payloadSize, errorBuffer); err != nil {
 				session.close("SRT send failed: " + err.Error())
 				return
 			}
@@ -698,6 +731,10 @@ func openMulticast(relay srtrelay.Relay) (*net.UDPConn, error) {
 	connection, err := net.ListenMulticastUDP("udp4", networkInterface, address)
 	if err != nil {
 		return nil, err
+	}
+	if err := restrictMulticastToJoinedGroups(connection); err != nil {
+		_ = connection.Close()
+		return nil, fmt.Errorf("restrict multicast groups: %w", err)
 	}
 	if err := connection.SetReadBuffer(8 * 1024 * 1024); err != nil {
 		_ = connection.Close()

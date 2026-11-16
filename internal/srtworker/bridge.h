@@ -26,7 +26,7 @@ int neo_srt_accept(int listener, char *remote_ip, int remote_ip_size,
                    int *remote_port, char *stream_id, int stream_id_size,
                    char *peer_version, int peer_version_size, int *encrypted,
                    char *error, int error_size);
-int neo_srt_send(int socket, const char *data, int size,
+int neo_srt_send_batch(int socket, const char *data, int size, int payload_size,
                  char *error, int error_size);
 int neo_srt_stats(int socket, NeoSRTStats *stats,
                   char *error, int error_size);
