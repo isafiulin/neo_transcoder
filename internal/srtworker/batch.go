@@ -5,7 +5,10 @@ import "time"
 const (
 	// inputPollInterval bounds the added delivery delay. Input is drained and
 	// forwarded once per interval instead of waking up for every datagram.
-	inputPollInterval = 5 * time.Millisecond
+	// Each forwarded batch also wakes libsrt's send thread, so fewer, larger
+	// batches matter as much as the poll itself; 20 ms is negligible next to
+	// the SRT latency budget.
+	inputPollInterval = 20 * time.Millisecond
 	// Soft cap per poll so a flooded input cannot starve shutdown checks.
 	maxDatagramsPerPoll = 1024
 )
