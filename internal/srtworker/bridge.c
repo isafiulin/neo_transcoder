@@ -4,12 +4,14 @@
 #include "_cgo_export.h"
 
 #include <arpa/inet.h>
+#include <errno.h>
 #include <netdb.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 
 #include <srt/srt.h>
 
@@ -148,6 +150,7 @@ int neo_srt_caller_open(const char *destination_address, int port,
         return -1;
     }
     int enabled = 1;
+    int disabled = 0;
     int key_length = 32;
     int minimum_version = 0x010300;
     SRT_TRANSTYPE transmission_type = SRTT_LIVE;
@@ -156,7 +159,8 @@ int neo_srt_caller_open(const char *destination_address, int port,
         set_option(socket, SRTO_PEERLATENCY, &latency_ms, sizeof(latency_ms), error, error_size) != 0 ||
         set_option(socket, SRTO_PAYLOADSIZE, &payload_size, sizeof(payload_size), error, error_size) != 0 ||
         set_option(socket, SRTO_MINVERSION, &minimum_version, sizeof(minimum_version), error, error_size) != 0 ||
-        set_option(socket, SRTO_STREAMID, stream_id, (int)strlen(stream_id), error, error_size) != 0) {
+        set_option(socket, SRTO_STREAMID, stream_id, (int)strlen(stream_id), error, error_size) != 0 ||
+        set_option(socket, SRTO_SNDSYN, &disabled, sizeof(disabled), error, error_size) != 0) {
         srt_close(socket);
         return -1;
     }
@@ -209,9 +213,14 @@ int neo_srt_accept(int listener, char *remote_ip, int remote_ip_size,
                     NI_NUMERICHOST | NI_NUMERICSERV) != 0) {
         copy_error(error, error_size, "cannot resolve accepted SRT peer address");
         srt_close(socket);
-        return -1;
+        return NEO_SRT_PEER_FAILED;
     }
     *remote_port = atoi(service);
+    int disabled = 0;
+    if (set_option(socket, SRTO_SNDSYN, &disabled, sizeof(disabled), error, error_size) != 0) {
+        srt_close(socket);
+        return NEO_SRT_PEER_FAILED;
+    }
 
     int stream_size = stream_id_size - 1;
     if (srt_getsockopt(socket, 0, SRTO_STREAMID, stream_id, &stream_size) == SRT_ERROR) {
@@ -242,15 +251,22 @@ int neo_srt_send_batch(int socket, const char *data, int size, int payload_size,
         return -1;
     }
     /* One Go/C transition, but one SRT message per payload. Never send a
-       multi-packet batch as a single message in SRT live mode. */
+       multi-packet batch as a single message in SRT live mode. Sockets are
+       non-blocking: a full send buffer stops the batch and the caller counts
+       the rest as dropped. */
+    int accepted = 0;
     for (int offset = 0; offset < size; offset += payload_size) {
         int sent = srt_sendmsg(socket, data + offset, payload_size, -1, 1);
+        if (sent == SRT_ERROR && srt_getlasterror(NULL) == SRT_EASYNCSND) {
+            return accepted;
+        }
         if (sent == SRT_ERROR || sent != payload_size) {
             copy_error(error, error_size, srt_getlasterror_str());
             return -1;
         }
+        accepted++;
     }
-    return 0;
+    return accepted;
 }
 
 int neo_srt_stats(int socket, NeoSRTStats *stats,
@@ -269,6 +285,12 @@ int neo_srt_stats(int socket, NeoSRTStats *stats,
     stats->bitrate_bps = (int64_t)(source.mbpsSendRate * 1000000.0);
     stats->rtt_ms = source.msRTT;
     return 0;
+}
+
+void neo_sleep_us(int microseconds) {
+    struct timespec request = {microseconds / 1000000, (long)(microseconds % 1000000) * 1000L};
+    while (nanosleep(&request, &request) == -1 && errno == EINTR) {
+    }
 }
 
 void neo_srt_close(int socket) {

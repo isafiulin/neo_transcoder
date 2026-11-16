@@ -1,6 +1,7 @@
 package srtworker
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -13,16 +14,23 @@ func TestBroadcastDisconnectsPersistentlySlowClient(t *testing.T) {
 		config:   srtrelay.WorkerConfig{Relay: srtrelay.Relay{PayloadSize: 1316}},
 		events:   make(chan srtrelay.WorkerEvent, 1024),
 		sessions: make(map[string]*clientSession),
+		send:     func(int, []byte, int) (int, error) { return 0, nil },
 	}
 	session := &clientSession{
-		worker: worker, socket: -1, queue: make(chan []byte, sessionQueueSize),
+		worker: worker, socket: -1,
 		done: make(chan struct{}), data: srtrelay.Session{ID: "slow-session"},
 	}
 	worker.sessions[session.data.ID] = session
 	packet := make([]byte, 1316)
-	for index := 0; index < sessionQueueSize+maxQueueDropBurst; index++ {
+	for index := 0; index < maxQueueDropBurst-1; index++ {
 		worker.broadcast(packet)
 	}
+	select {
+	case <-session.done:
+		t.Fatal("client disconnected before the drop burst limit")
+	default:
+	}
+	worker.broadcast(packet)
 
 	select {
 	case <-session.done:
@@ -44,6 +52,35 @@ func TestBroadcastDisconnectsPersistentlySlowClient(t *testing.T) {
 	}
 }
 
+func TestBroadcastClosesSessionOnSendError(t *testing.T) {
+	worker := &worker{
+		config:   srtrelay.WorkerConfig{Relay: srtrelay.Relay{PayloadSize: 1316}},
+		events:   make(chan srtrelay.WorkerEvent, 10),
+		sessions: make(map[string]*clientSession),
+		send:     func(int, []byte, int) (int, error) { return 0, errors.New("connection lost") },
+	}
+	session := &clientSession{
+		worker: worker, socket: -1,
+		done: make(chan struct{}), data: srtrelay.Session{ID: "broken"},
+	}
+	worker.sessions[session.data.ID] = session
+	worker.broadcast(make([]byte, 1316))
+	select {
+	case <-session.done:
+	default:
+		t.Fatal("session with failed send was not closed")
+	}
+	event := <-worker.events
+	if event.Reason != "SRT send failed: connection lost" {
+		t.Fatalf("disconnect reason = %q", event.Reason)
+	}
+	// Later broadcasts skip the closed session.
+	worker.broadcast(make([]byte, 1316))
+	if len(worker.events) != 0 {
+		t.Fatal("closed session produced more events")
+	}
+}
+
 func TestSessionCloseIsIdempotentUnderConcurrentFailures(t *testing.T) {
 	worker := &worker{
 		config:   srtrelay.WorkerConfig{Relay: srtrelay.Relay{PayloadSize: 1316}},
@@ -51,7 +88,7 @@ func TestSessionCloseIsIdempotentUnderConcurrentFailures(t *testing.T) {
 		sessions: make(map[string]*clientSession),
 	}
 	session := &clientSession{
-		worker: worker, socket: -1, queue: make(chan []byte, 1),
+		worker: worker, socket: -1,
 		done: make(chan struct{}), data: srtrelay.Session{ID: "session-1"},
 	}
 	worker.sessions[session.data.ID] = session

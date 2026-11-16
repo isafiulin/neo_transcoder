@@ -11,6 +11,7 @@ import "C"
 
 import (
 	"fmt"
+	"time"
 	"unsafe"
 )
 
@@ -106,26 +107,32 @@ func nativeAccept(listener int) (int, string, int, string, string, bool, error) 
 		&encrypted,
 		(*C.char)(unsafe.Pointer(&errorBuffer[0])), C.int(len(errorBuffer)),
 	)
+	if socket == C.NEO_SRT_PEER_FAILED {
+		return -1, "", 0, "", "", false, fmt.Errorf("%w: %v", errPeerFailed, nativeError(errorBuffer))
+	}
 	if socket < 0 {
 		return -1, "", 0, "", "", false, nativeError(errorBuffer)
 	}
 	return int(socket), cString(remoteIP), int(remotePort), cString(streamID), cString(peerVersion), encrypted != 0, nil
 }
 
-func nativeSendBatch(socket int, data []byte, payloadSize int, errorBuffer []byte) error {
+// nativeSendBatch returns how many payloads the non-blocking SRT send buffer
+// accepted. Fewer than submitted with a nil error means the buffer was full.
+func nativeSendBatch(socket int, data []byte, payloadSize int, errorBuffer []byte) (int, error) {
 	if len(data) == 0 {
-		return nil
+		return 0, nil
 	}
-	if C.neo_srt_send_batch(
+	accepted := C.neo_srt_send_batch(
 		C.int(socket),
 		(*C.char)(unsafe.Pointer(&data[0])),
 		C.int(len(data)), C.int(payloadSize),
 		(*C.char)(unsafe.Pointer(&errorBuffer[0])),
 		C.int(len(errorBuffer)),
-	) != 0 {
-		return nativeError(errorBuffer)
+	)
+	if accepted < 0 {
+		return 0, nativeError(errorBuffer)
 	}
-	return nil
+	return int(accepted), nil
 }
 
 func nativeStats(socket int) (nativeStatistics, error) {
@@ -143,6 +150,13 @@ func nativeStats(socket int) (nativeStatistics, error) {
 		BitrateBPS:     int64(stats.bitrate_bps),
 		RTTMS:          float64(stats.rtt_ms),
 	}, nil
+}
+
+// nativePause sleeps inside a C call. A Go timer firing every few
+// milliseconds keeps waking the runtime's sysmon thread; a thread blocked in
+// C with a spare P does not.
+func nativePause(d time.Duration) {
+	C.neo_sleep_us(C.int(d / time.Microsecond))
 }
 
 func nativeClose(socket int) {

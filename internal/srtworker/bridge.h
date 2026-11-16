@@ -22,14 +22,21 @@ int neo_srt_caller_open(const char *destination_address, int port,
                         int latency_ms, int payload_size,
                         const char *stream_id, const char *passphrase,
                         char *error, int error_size);
+/* Returned by neo_srt_accept when one accepted peer had to be dropped but the
+   listener itself is healthy. */
+#define NEO_SRT_PEER_FAILED -2
+
 int neo_srt_accept(int listener, char *remote_ip, int remote_ip_size,
                    int *remote_port, char *stream_id, int stream_id_size,
                    char *peer_version, int peer_version_size, int *encrypted,
                    char *error, int error_size);
+/* Returns the number of payloads accepted (fewer when the non-blocking send
+   buffer is full) or -1 on a fatal socket error. */
 int neo_srt_send_batch(int socket, const char *data, int size, int payload_size,
-                 char *error, int error_size);
+                       char *error, int error_size);
 int neo_srt_stats(int socket, NeoSRTStats *stats,
                   char *error, int error_size);
 void neo_srt_close(int socket);
+void neo_sleep_us(int microseconds);
 
 #endif

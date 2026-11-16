@@ -1,11 +1,17 @@
 package srtworker
 
+const continuityUnseen = 0xff
+
 type continuityTracker struct {
-	last map[uint16]byte
+	last [8192]byte
 }
 
 func newContinuityTracker() *continuityTracker {
-	return &continuityTracker{last: make(map[uint16]byte)}
+	tracker := &continuityTracker{}
+	for index := range tracker.last {
+		tracker.last[index] = continuityUnseen
+	}
+	return tracker
 }
 
 func (t *continuityTracker) observe(data []byte) int64 {
@@ -37,7 +43,7 @@ func (t *continuityTracker) observe(data []byte) int64 {
 			discontinuity = packet[5]&0x80 != 0
 		}
 		counter := packet[3] & 0x0f
-		if previous, ok := t.last[pid]; ok && !discontinuity && counter != (previous+1)&0x0f {
+		if previous := t.last[pid]; previous != continuityUnseen && !discontinuity && counter != (previous+1)&0x0f {
 			errors++
 		}
 		t.last[pid] = counter

@@ -3,40 +3,29 @@ package srtworker
 import "time"
 
 const (
-	sendBatchPackets = 8
-	// ponytail: at most 5 ms of batching delay; keep SRT messages separate.
-	// Larger groups reduce Go/C calls but increase delivery latency.
-	sendBatchDelay = 5 * time.Millisecond
+	// inputPollInterval bounds the added delivery delay. Input is drained and
+	// forwarded once per interval instead of waking up for every datagram.
+	inputPollInterval = 5 * time.Millisecond
+	// Soft cap per poll so a flooded input cannot starve shutdown checks.
+	maxDatagramsPerPoll = 1024
 )
 
-// packetBatcher owns its pending bytes. Emitted batches are immutable and may
-// be shared by multiple session queues until their sends complete.
-type packetBatcher struct {
+// payloadBuffer accumulates multicast bytes and exposes whole SRT payloads.
+type payloadBuffer struct {
 	payloadSize int
-	pending     []byte
+	data        []byte
 }
 
-func newPacketBatcher(payloadSize int) *packetBatcher {
-	return &packetBatcher{payloadSize: payloadSize, pending: make([]byte, 0, payloadSize*sendBatchPackets)}
+func (b *payloadBuffer) write(data []byte) {
+	b.data = append(b.data, data...)
 }
 
-func (b *packetBatcher) append(data []byte, emit func([]byte)) {
-	for len(data) > 0 {
-		n := min(len(data), cap(b.pending)-len(b.pending))
-		b.pending = append(b.pending, data[:n]...)
-		data = data[n:]
-		if len(b.pending) == cap(b.pending) {
-			b.flush(emit)
-		}
-	}
+// ready returns all complete payloads. The slice is valid until the next
+// write or consume.
+func (b *payloadBuffer) ready() []byte {
+	return b.data[:len(b.data)/b.payloadSize*b.payloadSize]
 }
 
-func (b *packetBatcher) flush(emit func([]byte)) {
-	n := len(b.pending) / b.payloadSize * b.payloadSize
-	if n == 0 {
-		return
-	}
-	emit(append([]byte(nil), b.pending[:n]...))
-	remaining := copy(b.pending, b.pending[n:])
-	b.pending = b.pending[:remaining]
+func (b *payloadBuffer) consume(n int) {
+	b.data = b.data[:copy(b.data, b.data[n:])]
 }

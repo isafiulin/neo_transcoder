@@ -2,7 +2,10 @@
 
 package srtworker
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 func nativeStartup() error {
 	return fmt.Errorf("SRT worker was built without libsrt support")
@@ -22,8 +25,8 @@ func nativeAccept(int) (int, string, int, string, string, bool, error) {
 	return -1, "", 0, "", "", false, fmt.Errorf("SRT worker was built without libsrt support")
 }
 
-func nativeSendBatch(int, []byte, int, []byte) error {
-	return fmt.Errorf("SRT worker was built without libsrt support")
+func nativeSendBatch(int, []byte, int, []byte) (int, error) {
+	return 0, fmt.Errorf("SRT worker was built without libsrt support")
 }
 
 func nativeStats(int) (nativeStatistics, error) {
@@ -31,3 +34,5 @@ func nativeStats(int) (nativeStatistics, error) {
 }
 
 func nativeClose(int) {}
+
+func nativePause(d time.Duration) { time.Sleep(d) }

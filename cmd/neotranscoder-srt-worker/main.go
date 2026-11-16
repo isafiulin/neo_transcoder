@@ -31,8 +31,9 @@ func main() {
 		os.Exit(2)
 	}
 	if os.Getenv("GOMAXPROCS") == "" {
-		// One worker runs per relay; with the default (all cores) dozens of
-		// workers each spin up idle Ps and fight over the scheduler.
+		// The input loop sleeps inside C while holding a P. A second P lets
+		// sysmon leave that call alone instead of retaking it every 20 us;
+		// more Ps only add idle threads across dozens of workers.
 		runtime.GOMAXPROCS(2)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

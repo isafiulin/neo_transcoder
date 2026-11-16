@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,13 +13,15 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"neotranscoder/internal/srtrelay"
 )
 
 const (
-	sessionQueueSize   = 512
+	// A session whose send buffer refuses this many consecutive payloads is
+	// disconnected so one slow receiver cannot hold the relay back.
 	maxQueueDropBurst  = 256
 	handshakeAuditWait = 10 * time.Second
 )
@@ -40,7 +43,12 @@ type worker struct {
 	reservations map[string]int
 	attempts     map[string]attemptWindow
 	listener     int
-	input        *net.UDPConn
+	inputFD      int
+
+	// Owned by the input goroutine.
+	send      batchSender
+	sendError []byte
+	targets   []*clientSession
 
 	inputBytes      atomic.Int64
 	inputPackets    atomic.Int64
@@ -69,17 +77,19 @@ type attemptWindow struct {
 }
 
 type clientSession struct {
-	worker        *worker
-	socket        int
-	queue         chan []byte
-	done          chan struct{}
-	closeOnce     sync.Once
-	data          srtrelay.Session
-	dropBurst     atomic.Int64
-	appDrops      atomic.Int64
-	queuedPackets atomic.Int64
-	fatal         chan<- error
+	worker    *worker
+	socket    int
+	done      chan struct{}
+	closeOnce sync.Once
+	data      srtrelay.Session
+	dropBurst atomic.Int64
+	appDrops  atomic.Int64
+	fatal     chan<- error
 }
+
+// batchSender submits whole payloads to one SRT socket without blocking and
+// returns how many were accepted. A non-nil error is fatal for the session.
+type batchSender func(socket int, payloads []byte, payloadSize int) (int, error)
 
 func Run(ctx context.Context, config srtrelay.WorkerConfig, stdout, stderr io.Writer) error {
 	w, err := newWorker(config)
@@ -100,12 +110,17 @@ func Run(ctx context.Context, config srtrelay.WorkerConfig, stdout, stderr io.Wr
 	eventErr := make(chan error, 1)
 	go writeEvents(w.events, stdout, eventErr)
 
-	input, err := openMulticast(config.Relay)
+	connection, err := openMulticast(config.Relay)
 	if err != nil {
 		return fmt.Errorf("multicast input: %w", err)
 	}
-	w.input = input
-	defer input.Close()
+	w.inputFD, err = detachFromPoller(connection)
+	if err != nil {
+		return fmt.Errorf("multicast input: %w", err)
+	}
+	// Closed only after wg.Wait: the input loop polls stopping instead of
+	// being unblocked by a close, so the descriptor is never reused under it.
+	defer syscall.Close(w.inputFD)
 
 	runErr := make(chan error, 3)
 	endpoint := -1
@@ -120,7 +135,7 @@ func Run(ctx context.Context, config srtrelay.WorkerConfig, stdout, stderr io.Wr
 		}
 		now := time.Now().UTC()
 		session := &clientSession{
-			worker: w, socket: endpoint, queue: make(chan []byte, sessionQueueSize),
+			worker: w, socket: endpoint,
 			done: make(chan struct{}), fatal: runErr,
 			data: srtrelay.Session{
 				ID: fmt.Sprintf("publish-%d", now.UnixNano()), RelayID: config.Relay.ID,
@@ -132,8 +147,6 @@ func Run(ctx context.Context, config srtrelay.WorkerConfig, stdout, stderr io.Wr
 		w.sessions[session.data.ID] = session
 		data := session.data
 		w.emit(srtrelay.WorkerEvent{Type: "session_connected", Time: now, Session: &data})
-		w.wg.Add(1)
-		go session.sendLoop()
 	} else {
 		endpoint, err = nativeOpenListener(
 			config.Relay.BindAddress, config.Relay.Port, config.Relay.LatencyMS,
@@ -164,7 +177,6 @@ func Run(ctx context.Context, config srtrelay.WorkerConfig, stdout, stderr io.Wr
 	}
 	w.stopping.Store(true)
 	cancel()
-	_ = input.Close()
 	nativeClose(endpoint)
 	w.closeAllSessions("relay stopped")
 	w.mu.Lock()
@@ -403,7 +415,7 @@ func (w *worker) expireAttempt(key string) {
 	}
 }
 
-func (w *worker) acceptLoop(errors chan<- error) {
+func (w *worker) acceptLoop(failures chan<- error) {
 	defer w.wg.Done()
 	for {
 		socket, remoteIP, remotePort, streamID, peerVersion, encrypted, err := nativeAccept(w.listener)
@@ -411,7 +423,11 @@ func (w *worker) acceptLoop(errors chan<- error) {
 			if w.isStopping() {
 				return
 			}
-			errors <- fmt.Errorf("SRT accept: %w", err)
+			if errors.Is(err, errPeerFailed) {
+				// Its pending handshake expires and is audited with the peer address.
+				continue
+			}
+			failures <- fmt.Errorf("SRT accept: %w", err)
 			return
 		}
 		key := attemptKey(remoteIP, remotePort, streamID)
@@ -439,7 +455,6 @@ func (w *worker) acceptLoop(errors chan<- error) {
 		session := &clientSession{
 			worker: w,
 			socket: socket,
-			queue:  make(chan []byte, sessionQueueSize),
 			done:   make(chan struct{}),
 			data: srtrelay.Session{
 				ID:          sessionID,
@@ -457,112 +472,95 @@ func (w *worker) acceptLoop(errors chan<- error) {
 		w.mu.Unlock()
 		data := session.data
 		w.emit(srtrelay.WorkerEvent{Type: "session_connected", Time: data.ConnectedAt, Session: &data})
-		w.wg.Add(1)
-		go session.sendLoop()
 	}
 }
 
-func (w *worker) inputLoop(errors chan<- error) {
+// inputLoop wakes once per inputPollInterval, drains every queued multicast
+// datagram and forwards the complete payloads to all sessions. Waking per
+// poll instead of per datagram is what keeps CPU low with many relays. The
+// pause is a C sleep, not a Go timer: see nativePause.
+func (w *worker) inputLoop(failures chan<- error) {
 	defer w.wg.Done()
-	buffer := make([]byte, 65535)
-	batches := newPacketBatcher(w.config.Relay.PayloadSize)
+	reader := newDatagramReader()
+	payloads := payloadBuffer{payloadSize: w.config.Relay.PayloadSize}
 	continuity := newContinuityTracker()
-	var deadline time.Time
+	var bytesRead, tsPackets, continuityErrors int64
+	handle := func(datagram []byte) {
+		bytesRead += int64(len(datagram))
+		tsPackets += int64(len(datagram) / 188)
+		continuityErrors += continuity.observe(datagram)
+		payloads.write(datagram)
+	}
 	for {
-		// ReadFromUDPAddrPort avoids allocating an unused source IP per datagram.
-		count, _, err := w.input.ReadFromUDPAddrPort(buffer)
-		if err != nil {
+		nativePause(inputPollInterval)
+		if w.isStopping() {
+			return
+		}
+		bytesRead, tsPackets, continuityErrors = 0, 0, 0
+		if err := reader.drain(w.inputFD, maxDatagramsPerPoll, handle); err != nil {
 			if w.isStopping() {
 				return
 			}
-			if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
-				batches.flush(w.broadcast)
-				deadline = time.Time{}
-				if err := w.input.SetReadDeadline(deadline); err != nil {
-					errors <- fmt.Errorf("multicast deadline: %w", err)
-					return
-				}
-				continue
-			}
-			errors <- fmt.Errorf("multicast read: %w", err)
+			failures <- fmt.Errorf("multicast read: %w", err)
 			return
 		}
-		w.inputBytes.Add(int64(count))
-		w.inputPackets.Add(int64(count / 188))
-		w.lastInputAt.Store(time.Now().UnixNano())
-		w.continuityError.Add(continuity.observe(buffer[:count]))
-		batches.append(buffer[:count], w.broadcast)
-		nextDeadline := deadline
-		if len(batches.pending) == 0 {
-			nextDeadline = time.Time{}
-		} else if deadline.IsZero() {
-			nextDeadline = time.Now().Add(sendBatchDelay)
+		if bytesRead > 0 {
+			w.inputBytes.Add(bytesRead)
+			w.inputPackets.Add(tsPackets)
+			w.continuityError.Add(continuityErrors)
+			w.lastInputAt.Store(time.Now().UnixNano())
 		}
-		if nextDeadline != deadline {
-			deadline = nextDeadline
-			if err := w.input.SetReadDeadline(deadline); err != nil {
-				errors <- fmt.Errorf("multicast deadline: %w", err)
-				return
-			}
+		if ready := payloads.ready(); len(ready) > 0 {
+			w.broadcast(ready)
+			payloads.consume(len(ready))
 		}
 	}
 }
 
-func (w *worker) broadcast(batch []byte) {
-	packets := int64(len(batch) / w.config.Relay.PayloadSize)
-	// All queue operations are nonblocking. Keep the read lock instead of
-	// allocating a session snapshot for every packet/batch.
+// broadcast sends whole payloads to every session. It runs on the input
+// goroutine; SRT sockets are non-blocking, so a slow receiver only loses its
+// own payloads. No worker lock is held during native calls.
+func (w *worker) broadcast(payloads []byte) {
+	payloadSize := w.config.Relay.PayloadSize
+	total := int64(len(payloads) / payloadSize)
 	w.mu.RLock()
-	defer w.mu.RUnlock()
 	for _, session := range w.sessions {
+		w.targets = append(w.targets, session)
+	}
+	w.mu.RUnlock()
+	for _, session := range w.targets {
 		select {
 		case <-session.done:
 			continue
 		default:
 		}
-		// Bound queued packets, not batches: preserve the 512-packet memory ceiling.
-		if session.queuedPackets.Add(packets) <= sessionQueueSize {
-			select {
-			case session.queue <- batch:
-				session.dropBurst.Store(0)
-				continue
-			case <-session.done:
-				session.queuedPackets.Add(-packets)
-				continue
-			default:
-			}
+		accepted, err := w.sendBatch(session.socket, payloads, payloadSize)
+		if err != nil {
+			session.close("SRT send failed: " + err.Error())
+			continue
 		}
-		session.queuedPackets.Add(-packets)
-		session.appDrops.Add(packets)
-		dropped := session.dropBurst.Add(packets)
-		if dropped >= maxQueueDropBurst && dropped-packets < maxQueueDropBurst {
-			go session.close("client send queue remained full")
+		dropped := total - int64(accepted)
+		if dropped == 0 {
+			session.dropBurst.Store(0)
+			continue
+		}
+		session.appDrops.Add(dropped)
+		if session.dropBurst.Add(dropped) >= maxQueueDropBurst {
+			session.close("client send queue remained full")
 		}
 	}
+	clear(w.targets)
+	w.targets = w.targets[:0]
 }
 
-func (session *clientSession) sendLoop() {
-	defer session.worker.wg.Done()
-	// Reuse the C error buffer rather than allocate it for every SRT packet.
-	errorBuffer := make([]byte, 512)
-	payloadSize := session.worker.config.Relay.PayloadSize
-	for {
-		select {
-		case <-session.done:
-			return
-		case batch := <-session.queue:
-			session.queuedPackets.Add(-int64(len(batch) / payloadSize))
-			select {
-			case <-session.done:
-				return
-			default:
-			}
-			if err := nativeSendBatch(session.socket, batch, payloadSize, errorBuffer); err != nil {
-				session.close("SRT send failed: " + err.Error())
-				return
-			}
-		}
+func (w *worker) sendBatch(socket int, payloads []byte, payloadSize int) (int, error) {
+	if w.send != nil {
+		return w.send(socket, payloads, payloadSize)
 	}
+	if w.sendError == nil {
+		w.sendError = make([]byte, 512)
+	}
+	return nativeSendBatch(socket, payloads, payloadSize, w.sendError)
 }
 
 func (session *clientSession) close(reason string) {
@@ -741,6 +739,33 @@ func openMulticast(relay srtrelay.Relay) (*net.UDPConn, error) {
 		return nil, err
 	}
 	return connection, nil
+}
+
+// detachFromPoller returns a duplicate descriptor of the socket and closes the
+// connection. While a UDPConn stays registered with Go's netpoller, every
+// arriving datagram wakes a runtime thread although nothing waits on it; the
+// input loop reads the plain descriptor on its own schedule instead.
+func detachFromPoller(connection *net.UDPConn) (int, error) {
+	duplicate := -1
+	raw, err := connection.SyscallConn()
+	if err == nil {
+		if controlErr := raw.Control(func(fd uintptr) {
+			duplicate, err = syscall.Dup(int(fd))
+		}); controlErr != nil {
+			err = controlErr
+		}
+	}
+	if closeErr := connection.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		if duplicate >= 0 {
+			_ = syscall.Close(duplicate)
+		}
+		return -1, err
+	}
+	syscall.CloseOnExec(duplicate)
+	return duplicate, nil
 }
 
 func interfaceByIP(ip net.IP) (*net.Interface, error) {
