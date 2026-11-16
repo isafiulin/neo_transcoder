@@ -20,18 +20,25 @@ class _NeoTableScrollState extends State<NeoTableScroll> {
 
   @override
   Widget build(BuildContext context) {
-    return Scrollbar(
-      controller: _controller,
-      thumbVisibility: true,
-      trackVisibility: true,
-      interactive: true,
-      thickness: 8,
-      scrollbarOrientation: ScrollbarOrientation.top,
-      child: SingleChildScrollView(
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) => Scrollbar(
         controller: _controller,
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.only(top: 12),
-        child: widget.child,
+        thumbVisibility: true,
+        trackVisibility: true,
+        interactive: true,
+        thickness: 8,
+        scrollbarOrientation: ScrollbarOrientation.top,
+        child: SingleChildScrollView(
+          controller: _controller,
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.only(top: 12),
+          child: ConstrainedBox(
+            // Stretch the table to fill the panel when there is spare width;
+            // horizontal scrolling still applies when it does not fit.
+            constraints: BoxConstraints(minWidth: constraints.maxWidth),
+            child: widget.child,
+          ),
+        ),
       ),
     );
   }

@@ -18,6 +18,11 @@ class AppShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // SRT list screens (relays/clients/sessions/audit) hold wide tables, so
+    // they use the full window width; editor forms keep the capped layout.
+    final bool fullWidth = location.startsWith(AppRoutes.srt) &&
+        !location.endsWith('/new') &&
+        !location.endsWith('/edit');
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         final bool wide = constraints.maxWidth >= 980;
@@ -26,7 +31,9 @@ class AppShell extends StatelessWidget {
             body: Row(
               children: <Widget>[
                 _SideNav(location: location),
-                Expanded(child: _ContentFrame(child: child)),
+                Expanded(
+                  child: _ContentFrame(fullWidth: fullWidth, child: child),
+                ),
               ],
             ),
           );
@@ -36,7 +43,7 @@ class AppShell extends StatelessWidget {
             title: const _BrandHeader(compact: true),
           ),
           drawer: Drawer(child: _SideNav(location: location)),
-          body: _ContentFrame(child: child),
+          body: _ContentFrame(fullWidth: fullWidth, child: child),
         );
       },
     );
@@ -44,9 +51,10 @@ class AppShell extends StatelessWidget {
 }
 
 class _ContentFrame extends StatelessWidget {
-  const _ContentFrame({required this.child});
+  const _ContentFrame({required this.child, this.fullWidth = false});
 
   final Widget child;
+  final bool fullWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -58,7 +66,9 @@ class _ContentFrame extends StatelessWidget {
             padding: const EdgeInsets.all(NeoSpacing.xl),
             child: Center(
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 1440),
+                constraints: BoxConstraints(
+                  maxWidth: fullWidth ? double.infinity : 1440,
+                ),
                 child: child,
               ),
             ),
