@@ -109,12 +109,12 @@ class SrtRelayGuideDialog extends StatelessWidget {
                           'when partners must initiate connections to this server.',
                       examples: <_GuideExample>[
                         _GuideExample(
-                          label: 'Publish to partner (NeoTranscoder is Caller)',
+                          label: 'Publish to partner (NeoSRT is Caller)',
                           value:
                               'Destination 203.0.113.50  •  UDP 9000  •  Stream ID channel-1',
                         ),
                         _GuideExample(
-                          label: 'Accept partners (NeoTranscoder is Listener)',
+                          label: 'Accept partners (NeoSRT is Listener)',
                           value: 'Bind 0.0.0.0  •  UDP 9000  •  Latency 800 ms',
                         ),
                         _GuideExample(

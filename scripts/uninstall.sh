@@ -24,7 +24,7 @@ rm -rf /usr/local/lib/neotranscoder
 if [ "$PURGE" -eq 1 ]; then
   rm -rf /etc/neotranscoder /var/lib/neotranscoder /var/log/neotranscoder
   userdel neotranscoder >/dev/null 2>&1 || true
-  echo "NeoTranscoder fully removed"
+  echo "NeoSRT fully removed"
 else
-  echo "NeoTranscoder removed; config/state/logs kept. Use --purge to remove data."
+  echo "NeoSRT removed; config/state/logs kept. Use --purge to remove data."
 fi

@@ -5,14 +5,8 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:neotranscoder_ui/core/widgets/app_shell.dart';
-import 'package:neotranscoder_ui/data/repositories/transcoder_repository.dart';
+import 'package:neotranscoder_ui/data/repositories/service_repository.dart';
 import 'package:neotranscoder_ui/features/auth/login_screen.dart';
-import 'package:neotranscoder_ui/features/dashboard/dashboard_cubit.dart';
-import 'package:neotranscoder_ui/features/dashboard/dashboard_screen.dart';
-import 'package:neotranscoder_ui/features/logs/logs_cubit.dart';
-import 'package:neotranscoder_ui/features/logs/logs_screen.dart';
-import 'package:neotranscoder_ui/features/profiles/profiles_cubit.dart';
-import 'package:neotranscoder_ui/features/profiles/profiles_screen.dart';
 import 'package:neotranscoder_ui/features/settings/settings_cubit.dart';
 import 'package:neotranscoder_ui/features/settings/settings_screen.dart';
 import 'package:neotranscoder_ui/features/splash/splash_screen.dart';
@@ -24,8 +18,6 @@ import 'package:neotranscoder_ui/features/srt/srt_module_shell.dart';
 import 'package:neotranscoder_ui/features/srt/srt_relay_editor_screen.dart';
 import 'package:neotranscoder_ui/features/srt/srt_relays_screen.dart';
 import 'package:neotranscoder_ui/features/srt/srt_sessions_screen.dart';
-import 'package:neotranscoder_ui/features/streams/streams_cubit.dart';
-import 'package:neotranscoder_ui/features/streams/streams_screen.dart';
 import 'app_routes.dart';
 import 'session_cubit.dart';
 
@@ -83,55 +75,15 @@ GoRouter createRouter(SessionCubit session) {
         routes: <RouteBase>[
           GoRoute(
             path: AppRoutes.dashboard,
-            pageBuilder: (BuildContext context, GoRouterState state) =>
-                _slidePage(
-              state: state,
-              child: BlocProvider<DashboardCubit>(
-                create: (BuildContext context) => DashboardCubit(
-                  repository: context.read<TranscoderRepository>(),
-                )
-                  ..load()
-                  ..subscribe(),
-                child: const DashboardScreen(),
-              ),
-            ),
-          ),
-          GoRoute(
-            path: AppRoutes.streams,
-            pageBuilder: (BuildContext context, GoRouterState state) =>
-                _slidePage(
-              state: state,
-              child: BlocProvider<StreamsCubit>(
-                create: (BuildContext context) => StreamsCubit(
-                  repository: context.read<TranscoderRepository>(),
-                )
-                  ..load()
-                  ..subscribe(),
-                child: const StreamsScreen(),
-              ),
-            ),
-          ),
-          GoRoute(
-            path: AppRoutes.profiles,
-            pageBuilder: (BuildContext context, GoRouterState state) =>
-                _slidePage(
-              state: state,
-              child: BlocProvider<ProfilesCubit>(
-                create: (BuildContext context) => ProfilesCubit(
-                  repository: context.read<TranscoderRepository>(),
-                )
-                  ..load()
-                  ..subscribe(),
-                child: const ProfilesScreen(),
-              ),
-            ),
+            redirect: (BuildContext context, GoRouterState state) =>
+                AppRoutes.srtRelays,
           ),
           ShellRoute(
             builder:
                 (BuildContext context, GoRouterState state, Widget child) =>
                     BlocProvider<SrtCubit>(
               create: (BuildContext context) => SrtCubit(
-                repository: context.read<TranscoderRepository>(),
+                repository: context.read<ServiceRepository>(),
               )
                 ..load()
                 ..subscribe(),
@@ -205,28 +157,13 @@ GoRouter createRouter(SessionCubit session) {
             ],
           ),
           GoRoute(
-            path: AppRoutes.logs,
-            pageBuilder: (BuildContext context, GoRouterState state) =>
-                _slidePage(
-              state: state,
-              child: BlocProvider<LogsCubit>(
-                create: (BuildContext context) => LogsCubit(
-                  repository: context.read<TranscoderRepository>(),
-                )
-                  ..load()
-                  ..subscribe(),
-                child: const LogsScreen(),
-              ),
-            ),
-          ),
-          GoRoute(
             path: AppRoutes.settings,
             pageBuilder: (BuildContext context, GoRouterState state) =>
                 _slidePage(
               state: state,
               child: BlocProvider<SettingsCubit>(
                 create: (BuildContext context) => SettingsCubit(
-                  repository: context.read<TranscoderRepository>(),
+                  repository: context.read<ServiceRepository>(),
                 )..load(),
                 child: const SettingsScreen(),
               ),

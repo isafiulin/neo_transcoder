@@ -3,7 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:neotranscoder_ui/core/api/api_client.dart';
 import 'package:neotranscoder_ui/core/api/models.dart';
 import 'package:neotranscoder_ui/core/state/load_status.dart';
-import 'package:neotranscoder_ui/data/repositories/transcoder_repository.dart';
+import 'package:neotranscoder_ui/data/repositories/service_repository.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 class SettingsState extends Equatable {
@@ -43,11 +43,11 @@ class SettingsState extends Equatable {
 }
 
 class SettingsCubit extends Cubit<SettingsState> {
-  SettingsCubit({required TranscoderRepository repository})
+  SettingsCubit({required ServiceRepository repository})
       : _repository = repository,
         super(const SettingsState());
 
-  final TranscoderRepository _repository;
+  final ServiceRepository _repository;
 
   Future<void> load() async {
     emit(state.copyWith(status: LoadStatus.loading, error: ''));

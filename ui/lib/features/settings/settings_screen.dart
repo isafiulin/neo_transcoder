@@ -10,6 +10,7 @@ import 'package:neotranscoder_ui/core/state/load_status.dart';
 import 'package:neotranscoder_ui/core/widgets/neo_button.dart';
 import 'package:neotranscoder_ui/core/widgets/neo_panel.dart';
 import 'package:neotranscoder_ui/core/widgets/neo_state.dart';
+import 'package:neotranscoder_ui/core/widgets/neo_table_scroll.dart';
 import 'settings_cubit.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -116,8 +117,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return NeoErrorState(
           message: state.error, onRetry: context.read<SettingsCubit>().load);
     }
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
+    return NeoTableScroll(
       child: DataTable(
         headingRowHeight: 38,
         columns: const <DataColumn>[

@@ -12,6 +12,7 @@ import 'package:neotranscoder_ui/core/widgets/neo_button.dart';
 import 'package:neotranscoder_ui/core/widgets/neo_panel.dart';
 import 'package:neotranscoder_ui/core/widgets/neo_search_field.dart';
 import 'package:neotranscoder_ui/core/widgets/neo_state.dart';
+import 'package:neotranscoder_ui/core/widgets/neo_table_scroll.dart';
 import 'package:neotranscoder_ui/features/srt/srt_cubit.dart';
 import 'package:neotranscoder_ui/features/srt/srt_format.dart';
 
@@ -137,8 +138,7 @@ class _SrtClientsScreenState extends State<SrtClientsScreen> {
 
   Widget _table(List<SrtClient> clients) {
     return NeoPanel(
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
+      child: NeoTableScroll(
         child: DataTable(
           headingRowHeight: 40,
           dataRowMinHeight: 58,

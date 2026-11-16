@@ -12,6 +12,7 @@ import 'package:neotranscoder_ui/core/widgets/neo_button.dart';
 import 'package:neotranscoder_ui/core/widgets/neo_panel.dart';
 import 'package:neotranscoder_ui/core/widgets/neo_search_field.dart';
 import 'package:neotranscoder_ui/core/widgets/neo_state.dart';
+import 'package:neotranscoder_ui/core/widgets/neo_table_scroll.dart';
 import 'package:neotranscoder_ui/features/srt/srt_cubit.dart';
 import 'package:neotranscoder_ui/features/srt/srt_format.dart';
 
@@ -61,6 +62,7 @@ class _SrtRelaysScreenState extends State<SrtRelaysScreen> {
                       width: 150,
                       child: DropdownButtonFormField<String>(
                         initialValue: _status,
+                        isExpanded: true,
                         decoration: const InputDecoration(labelText: 'Status'),
                         items: const <DropdownMenuItem<String>>[
                           DropdownMenuItem(value: 'all', child: Text('All')),
@@ -129,8 +131,7 @@ class _SrtRelaysScreenState extends State<SrtRelaysScreen> {
           );
         }
         return NeoPanel(
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
+          child: NeoTableScroll(
             child: DataTable(
               headingRowHeight: 40,
               dataRowMinHeight: 58,
@@ -173,12 +174,15 @@ class _SrtRelaysScreenState extends State<SrtRelaysScreen> {
         DataCell(
           Tooltip(
             message: runtime.lastError,
-            child: Text(
-              runtime.lastError.isNotEmpty
-                  ? runtime.lastError
-                  : '${runtime.continuityErrors} continuity',
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
+            child: SizedBox(
+              width: 240,
+              child: Text(
+                runtime.lastError.isNotEmpty
+                    ? runtime.lastError
+                    : '${runtime.continuityErrors} continuity',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ),
         ),

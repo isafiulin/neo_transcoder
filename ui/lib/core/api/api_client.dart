@@ -164,99 +164,10 @@ class ApiClient {
     await _dio.delete<void>('/users/$username');
   }
 
-  Future<List<StreamView>> streams() async {
-    final response = await _dio.get<List<dynamic>>('/streams');
-    return (response.data ?? [])
-        .map((item) => StreamView.fromJson(item as Map<String, dynamic>))
-        .toList();
-  }
-
-  Future<List<Profile>> profiles() async {
-    final response = await _dio.get<List<dynamic>>('/profiles');
-    return (response.data ?? [])
-        .map((item) => Profile.fromJson(item as Map<String, dynamic>))
-        .toList();
-  }
-
-  Future<void> saveStream(Map<String, Object?> body) async {
-    await _dio.post<void>('/streams', data: body);
-  }
-
-  Future<void> updateStream(String id, Map<String, Object?> body) async {
-    await _dio.put<void>('/streams/$id', data: body);
-  }
-
-  Future<void> deleteStream(String id) async {
-    await _dio.delete<void>('/streams/$id');
-  }
-
-  Future<void> saveProfile(Map<String, Object?> body) async {
-    await _dio.post<void>('/profiles', data: body);
-  }
-
-  Future<void> updateProfile(String name, Map<String, Object?> body) async {
-    await _dio.put<void>('/profiles/$name', data: body);
-  }
-
-  Future<void> deleteProfile(String name) async {
-    await _dio.delete<void>('/profiles/$name');
-  }
-
-  Future<ProbeResult> probe(String inputUrl) async {
-    final Response<Map<String, dynamic>> response =
-        await _dio.post<Map<String, dynamic>>(
-      '/probe',
-      data: <String, Object?>{'input_url': inputUrl},
-    );
-    return ProbeResult.fromJson(response.data ?? <String, dynamic>{});
-  }
-
-  Future<List<LogEntry>> logs({String? streamId, int limit = 200}) async {
-    final path = streamId == null ? '/logs' : '/streams/$streamId/logs';
-    final response = await _dio.get<List<dynamic>>(
-      path,
-      queryParameters: {'limit': limit},
-    );
-    return (response.data ?? [])
-        .map((item) => LogEntry.fromJson(item as Map<String, dynamic>))
-        .toList();
-  }
-
-  Future<void> clearLogs({String? streamId}) async {
-    final path = streamId == null ? '/logs' : '/streams/$streamId/logs';
-    await _dio.delete<void>(path);
-  }
-
   Future<ServerStats> system() async {
     final Response<Map<String, dynamic>> response =
         await _dio.get<Map<String, dynamic>>('/system');
     return ServerStats.fromJson(response.data ?? <String, dynamic>{});
-  }
-
-  Future<List<StreamView>> metrics() async {
-    final response = await _dio.get<List<dynamic>>('/metrics');
-    return (response.data ?? [])
-        .map((item) => StreamView.fromJson(item as Map<String, dynamic>))
-        .toList();
-  }
-
-  Future<void> startStream(String id) async {
-    await _dio.post<void>('/streams/$id/start');
-  }
-
-  Future<void> stopStream(String id) async {
-    await _dio.post<void>('/streams/$id/stop');
-  }
-
-  Future<void> restartStream(String id) async {
-    await _dio.post<void>('/streams/$id/restart');
-  }
-
-  Future<CommandPreview> command(String id) async {
-    final response = await _dio.get<Map<String, dynamic>>(
-      '/streams/$id/ffmpeg-command',
-    );
-    return CommandPreview.fromJson(response.data ?? {});
   }
 
   Future<List<SrtRelayView>> srtRelays() async {
@@ -388,12 +299,6 @@ class ApiClient {
   }
 
   static const List<String> _sseEventTypes = <String>[
-    'stream_saved',
-    'stream_deleted',
-    'stream_state',
-    'stream_log',
-    'profile_saved',
-    'profile_deleted',
     'srt_relay_saved',
     'srt_relay_deleted',
     'srt_relay_state',
@@ -592,9 +497,9 @@ String _messageFromDio(DioException error) {
     case DioExceptionType.transformTimeout:
       return 'Request timed out';
     case DioExceptionType.connectionError:
-      return 'Cannot connect to NeoTranscoder API';
+      return 'Cannot connect to NeoSrt API';
     case DioExceptionType.badResponse:
-      return 'NeoTranscoder API returned ${error.response?.statusCode ?? 'an error'}';
+      return 'NeoSrt API returned ${error.response?.statusCode ?? 'an error'}';
     case DioExceptionType.cancel:
       return 'Request was cancelled';
     case DioExceptionType.badCertificate:

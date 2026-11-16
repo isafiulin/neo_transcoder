@@ -257,8 +257,13 @@ class _SrtAuditScreenState extends State<SrtAuditScreen> {
       child: Scrollbar(
         controller: _horizontal,
         thumbVisibility: true,
+        trackVisibility: true,
+        interactive: true,
+        thickness: 8,
+        scrollbarOrientation: ScrollbarOrientation.top,
         child: SingleChildScrollView(
           controller: _horizontal,
+          padding: const EdgeInsets.only(top: 12),
           scrollDirection: Axis.horizontal,
           child: SizedBox(
             width: tableWidth,

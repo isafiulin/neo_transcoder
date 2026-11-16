@@ -15,15 +15,13 @@ func TestDoctorReportsRunnableToolsAndWritableDirectories(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
-	cfg.FFmpeg.Path = executable
-	cfg.FFmpeg.FFprobePath = executable
 	cfg.SRT.WorkerPath = executable
 	cfg.Storage.Path = filepath.Join(dir, "state", "state.json")
 	cfg.Logs.Path = filepath.Join(dir, "logs", "app.log")
 	cfg.SRT.StatePath = filepath.Join(dir, "srt-state", "state.json")
 	cfg.SRT.AuditDir = filepath.Join(dir, "audit")
 	checks := Run(cfg)
-	if len(checks) != 7 || HasFailure(checks) {
+	if len(checks) != 5 || HasFailure(checks) {
 		t.Fatalf("doctor checks = %+v", checks)
 	}
 }

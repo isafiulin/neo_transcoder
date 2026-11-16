@@ -66,7 +66,7 @@ func Run(opts Options) error {
 		return err
 	}
 
-	fmt.Fprintln(stdout, "NeoTranscoder init")
+	fmt.Fprintln(stdout, "NeoSRT init")
 	fmt.Fprintf(stdout, "web: 0.0.0.0:%d\n", opts.Port)
 
 	if err := ensureUser(); err != nil {
@@ -100,7 +100,7 @@ func Run(opts Options) error {
 	}
 	failed := printDoctor(stdout, doctor.Run(cfg))
 	if failed {
-		fmt.Fprintf(stderr, "doctor reported missing requirements; install ffmpeg/ffprobe before production streams\n")
+		fmt.Fprintf(stderr, "doctor reported missing requirements; check the SRT worker and writable state directories\n")
 	}
 
 	if err := run("systemctl", "daemon-reload"); err != nil {
@@ -220,7 +220,7 @@ func writeConfig(port int, force bool) error {
 
 func writeUnit() error {
 	unit := `[Unit]
-Description=NeoTranscoder multicast transcoder manager
+Description=NeoSRT relay service
 After=network-online.target
 Wants=network-online.target
 

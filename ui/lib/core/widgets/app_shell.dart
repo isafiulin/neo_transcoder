@@ -147,34 +147,10 @@ class _SideNavContent extends StatelessWidget {
             child: _BrandHeader(),
           ),
           _NavItem(
-            icon: Icons.dashboard_outlined,
-            label: 'Dashboard',
-            path: AppRoutes.dashboard,
-            selected: location == AppRoutes.dashboard,
-          ),
-          _NavItem(
-            icon: Icons.stream_outlined,
-            label: 'Streams',
-            path: AppRoutes.streams,
-            selected: location == AppRoutes.streams,
-          ),
-          _NavItem(
-            icon: Icons.tune_outlined,
-            label: 'Profiles',
-            path: AppRoutes.profiles,
-            selected: location == AppRoutes.profiles,
-          ),
-          _NavItem(
             icon: Icons.public_outlined,
             label: 'SRT Relay',
             path: AppRoutes.srtRelays,
             selected: location.startsWith(AppRoutes.srt),
-          ),
-          _NavItem(
-            icon: Icons.article_outlined,
-            label: 'Logs',
-            path: AppRoutes.logs,
-            selected: location == AppRoutes.logs,
           ),
           _NavItem(
             icon: Icons.settings_outlined,
@@ -196,7 +172,7 @@ class _SideNavContent extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.all(NeoSpacing.lg),
             child: Text(
-              'NeoTranscoder',
+              'NeoSRT',
               style: Theme.of(context).textTheme.labelMedium,
             ),
           ),

@@ -1,5 +1,5 @@
 name: neotranscoder_ui
-description: Web UI for NeoTranscoder.
+description: Web UI for NeoSRT relay management.
 publish_to: "none"
 version: 0.3.8
 

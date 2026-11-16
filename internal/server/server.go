@@ -12,14 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"neotranscoder/internal/accounts"
 	"neotranscoder/internal/auth"
 	"neotranscoder/internal/buildinfo"
 	"neotranscoder/internal/config"
 	"neotranscoder/internal/doctor"
-	"neotranscoder/internal/ffmpeg"
-	"neotranscoder/internal/probe"
 	"neotranscoder/internal/srtrelay"
-	"neotranscoder/internal/streams"
 	"neotranscoder/internal/sysinfo"
 )
 
@@ -33,8 +31,7 @@ const userContextKey contextKey = "user"
 type Server struct {
 	cfg      config.Config
 	log      *slog.Logger
-	store    *streams.Store
-	jobs     *streams.JobManager
+	store    *accounts.Store
 	srtStore *srtrelay.Store
 	srtJobs  *srtrelay.Manager
 	srtErr   error
@@ -42,9 +39,9 @@ type Server struct {
 }
 
 func New(cfg config.Config, log *slog.Logger) (*Server, error) {
-	store, err := streams.NewStore(cfg.Storage.Path)
+	store, err := accounts.NewStore(cfg.Storage.Path)
 	if err != nil {
-		return nil, fmt.Errorf("stream store: %w", err)
+		return nil, fmt.Errorf("account store: %w", err)
 	}
 	srtStore, err := srtrelay.NewStore(
 		cfg.SRT.StatePath,
@@ -65,7 +62,6 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		cfg:      cfg,
 		log:      log,
 		store:    store,
-		jobs:     streams.NewJobManager(cfg.FFmpeg.Path, systemConfigFrom(cfg.FFmpeg), store, log),
 		srtStore: srtStore,
 		srtJobs:  srtrelay.NewManager(cfg.SRT.WorkerPath, srtStore, log),
 		srtErr:   srtErr,
@@ -88,14 +84,13 @@ func (s *Server) Run(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
-		s.jobs.StopAll()
 		s.srtJobs.StopAll()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	s.log.Info("starting neotranscoder", "addr", s.cfg.Addr())
+	s.log.Info("starting NeoSRT", "addr", s.cfg.Addr())
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
@@ -112,31 +107,11 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/change-password", s.changeOwnPassword)
 	mux.HandleFunc("GET /api/doctor", s.doctor)
 	mux.HandleFunc("GET /api/events", s.events)
-	mux.HandleFunc("GET /api/metrics", s.metrics)
 	mux.HandleFunc("GET /api/system", s.system)
-	mux.HandleFunc("GET /api/logs", s.logs)
-	mux.HandleFunc("DELETE /api/logs", s.clearLogs)
 	mux.HandleFunc("GET /api/users", s.listUsers)
 	mux.HandleFunc("POST /api/users", s.createUser)
 	mux.HandleFunc("PUT /api/users/{username}/password", s.changeUserPassword)
 	mux.HandleFunc("DELETE /api/users/{username}", s.deleteUser)
-	mux.HandleFunc("POST /api/probe", s.probe)
-	mux.HandleFunc("GET /api/profiles", s.listProfiles)
-	mux.HandleFunc("POST /api/profiles", s.upsertProfile)
-	mux.HandleFunc("GET /api/profiles/{name}", s.getProfile)
-	mux.HandleFunc("PUT /api/profiles/{name}", s.upsertProfile)
-	mux.HandleFunc("DELETE /api/profiles/{name}", s.deleteProfile)
-	mux.HandleFunc("GET /api/streams", s.listStreams)
-	mux.HandleFunc("POST /api/streams", s.upsertStream)
-	mux.HandleFunc("GET /api/streams/{id}", s.getStream)
-	mux.HandleFunc("PUT /api/streams/{id}", s.upsertStream)
-	mux.HandleFunc("DELETE /api/streams/{id}", s.deleteStream)
-	mux.HandleFunc("POST /api/streams/{id}/start", s.startStream)
-	mux.HandleFunc("POST /api/streams/{id}/stop", s.stopStream)
-	mux.HandleFunc("POST /api/streams/{id}/restart", s.restartStream)
-	mux.HandleFunc("GET /api/streams/{id}/ffmpeg-command", s.ffmpegCommand)
-	mux.HandleFunc("GET /api/streams/{id}/logs", s.streamLogs)
-	mux.HandleFunc("DELETE /api/streams/{id}/logs", s.clearStreamLogs)
 	mux.HandleFunc("GET /api/srt/relays", s.withSRT(s.listSRTRelays))
 	mux.HandleFunc("POST /api/srt/relays", s.withSRT(s.upsertSRTRelay))
 	mux.HandleFunc("GET /api/srt/relays/{id}", s.withSRT(s.getSRTRelay))
@@ -154,6 +129,9 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /api/srt/sessions", s.withSRT(s.listSRTSessions))
 	mux.HandleFunc("GET /api/srt/audit", s.withSRT(s.listSRTAudit))
 	mux.HandleFunc("DELETE /api/srt/audit", s.withSRT(s.clearSRTAudit))
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		writeErrorText(w, http.StatusNotFound, "API endpoint not found")
+	})
 	mux.Handle("/", s.web())
 	return s.auth(mux)
 }
@@ -371,7 +349,7 @@ func (s *Server) userFromRequest(w http.ResponseWriter, r *http.Request, kind st
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":      true,
-		"service": "neotranscoder",
+		"service": "neosrt",
 		"version": buildinfo.Version,
 		"commit":  buildinfo.Commit,
 		"date":    buildinfo.Date,
@@ -398,21 +376,12 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	streamEvents := s.store.Subscribe(r.Context())
 	srtEvents := s.srtStore.Subscribe(r.Context())
 	flusher.Flush()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case event, ok := <-streamEvents:
-			if !ok {
-				return
-			}
-			if err := writeSSE(w, event.Type, event); err != nil {
-				return
-			}
-			flusher.Flush()
 		case event, ok := <-srtEvents:
 			if !ok {
 				return
@@ -425,209 +394,8 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
-	limit := queryLimit(r)
-	writeJSON(w, http.StatusOK, s.store.Logs("", limit))
-}
-
-func (s *Server) clearLogs(w http.ResponseWriter, _ *http.Request) {
-	s.store.ClearLogs("")
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.store.Metrics())
-}
-
 func (s *Server) system(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.sys.Snapshot())
-}
-
-func (s *Server) probe(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		InputURL string `json:"input_url"`
-	}
-	if !readJSON(w, r, &req) {
-		return
-	}
-	result, err := probe.Run(r.Context(), s.cfg.FFmpeg.FFprobePath, req.InputURL)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, result)
-}
-
-func (s *Server) listStreams(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.store.List())
-}
-
-func (s *Server) listProfiles(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.store.ListProfiles())
-}
-
-func (s *Server) getProfile(w http.ResponseWriter, r *http.Request) {
-	profile, ok := s.store.GetProfile(r.PathValue("name"))
-	if !ok {
-		writeErrorText(w, http.StatusNotFound, "profile not found")
-		return
-	}
-	writeJSON(w, http.StatusOK, profile)
-}
-
-func (s *Server) upsertProfile(w http.ResponseWriter, r *http.Request) {
-	var profile ffmpeg.Profile
-	if !readJSON(w, r, &profile) {
-		return
-	}
-	if pathName := r.PathValue("name"); pathName != "" {
-		profile.Name = pathName
-	}
-	saved, err := s.store.UpsertProfile(profile)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, saved)
-}
-
-func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request) {
-	deleted, err := s.store.DeleteProfile(r.PathValue("name"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	if !deleted {
-		writeErrorText(w, http.StatusNotFound, "profile not found")
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) getStream(w http.ResponseWriter, r *http.Request) {
-	view, ok := s.store.Get(r.PathValue("id"))
-	if !ok {
-		writeErrorText(w, http.StatusNotFound, "stream not found")
-		return
-	}
-	writeJSON(w, http.StatusOK, view)
-}
-
-func (s *Server) upsertStream(w http.ResponseWriter, r *http.Request) {
-	var cfg streams.Config
-	if !readJSON(w, r, &cfg) {
-		return
-	}
-	if pathID := r.PathValue("id"); pathID != "" {
-		cfg.ID = pathID
-	}
-	view, err := s.store.Upsert(cfg)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, view)
-}
-
-func (s *Server) deleteStream(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	_ = s.jobs.Stop(id)
-	deleted, err := s.store.Delete(id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if !deleted {
-		writeErrorText(w, http.StatusNotFound, "stream not found")
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) startStream(w http.ResponseWriter, r *http.Request) {
-	if err := s.jobs.Start(r.PathValue("id")); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	s.getStream(w, r)
-}
-
-func (s *Server) stopStream(w http.ResponseWriter, r *http.Request) {
-	if err := s.jobs.Stop(r.PathValue("id")); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	s.getStream(w, r)
-}
-
-func (s *Server) restartStream(w http.ResponseWriter, r *http.Request) {
-	_ = s.jobs.Stop(r.PathValue("id"))
-	if err := s.jobs.Start(r.PathValue("id")); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	s.getStream(w, r)
-}
-
-func (s *Server) ffmpegCommand(w http.ResponseWriter, r *http.Request) {
-	view, ok := s.store.Get(r.PathValue("id"))
-	if !ok {
-		writeErrorText(w, http.StatusNotFound, "stream not found")
-		return
-	}
-	profile, ok := s.store.GetProfile(view.Config.ProfileName)
-	if !ok {
-		writeErrorText(w, http.StatusBadRequest, "profile not found")
-		return
-	}
-	args, err := ffmpeg.BuildArgs(ffmpeg.Stream{
-		InputURL:     view.Config.InputURL,
-		OutputURL:    view.Config.OutputURL,
-		SourceType:   view.Config.SourceType,
-		VideoMap:     view.Config.VideoMap,
-		AudioMap:     view.Config.AudioMap,
-		AudioMaps:    view.Config.AudioMaps,
-		DisableAudio: view.Config.DisableAudio,
-		Logo: ffmpeg.LogoOverlay{
-			Enabled: view.Config.Logo.Enabled,
-			Path:    view.Config.Logo.Path,
-			X:       view.Config.Logo.X,
-			Y:       view.Config.Logo.Y,
-		},
-		Options:   view.Config.Options,
-		KeepStats: view.Config.KeepStats,
-	}, profile, systemConfigFrom(s.cfg.FFmpeg).WithLogLevel(view.Config.LogLevel))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"path": s.cfg.FFmpeg.Path,
-		"args": args,
-	})
-}
-
-func systemConfigFrom(cfg config.FFmpegConfig) ffmpeg.SystemConfig {
-	return ffmpeg.SystemConfig{
-		UDPFifoSize:        cfg.UDP.FifoSize,
-		UDPBufferSize:      cfg.UDP.BufferSize,
-		UDPOverrunNonfatal: cfg.UDP.OverrunNonfatal,
-		UDPReuse:           cfg.UDP.Reuse,
-		PktSize:            cfg.UDP.PktSize,
-		AnalyzeDuration:    cfg.Probe.AnalyzeDuration,
-		ProbeSize:          cfg.Probe.ProbeSize,
-		LogLevel:           cfg.LogLevel,
-	}
-}
-
-func (s *Server) streamLogs(w http.ResponseWriter, r *http.Request) {
-	limit := queryLimit(r)
-	writeJSON(w, http.StatusOK, s.store.Logs(r.PathValue("id"), limit))
-}
-
-func (s *Server) clearStreamLogs(w http.ResponseWriter, r *http.Request) {
-	s.store.ClearLogs(r.PathValue("id"))
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) listSRTRelays(w http.ResponseWriter, _ *http.Request) {

@@ -371,7 +371,7 @@ class _SrtRelayEditorScreenState extends State<SrtRelayEditorScreen> {
                   Expanded(
                     child: Text(
                       _direction == 'publish'
-                          ? 'NeoTranscoder initiates one connection to the partner listener.'
+                          ? 'NeoSRT initiates one connection to the partner listener.'
                           : 'Encryption keys and IP access are assigned per client.',
                     ),
                   ),

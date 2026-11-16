@@ -132,7 +132,7 @@ func TestServerStartsWithUnavailableSRTStore(t *testing.T) {
 	token := loginToken(t, httpServer)
 	response := request(t, httpServer, http.MethodGet, "/api/srt/relays", token, nil)
 	assertStatus(t, response, http.StatusServiceUnavailable)
-	response = request(t, httpServer, http.MethodGet, "/api/streams", token, nil)
+	response = request(t, httpServer, http.MethodGet, "/api/users", token, nil)
 	assertStatus(t, response, http.StatusOK)
 }
 
@@ -266,15 +266,13 @@ func TestSRTSSEEmitsRelayEvent(t *testing.T) {
 }
 
 func TestCoreAPIPositiveAndNegativeLifecycle(t *testing.T) {
-	server, httpServer := newHTTPTestServer(t)
-	server.cfg.FFmpeg.Path = filepath.Join(t.TempDir(), "missing-ffmpeg")
-	server.cfg.FFmpeg.FFprobePath = filepath.Join(t.TempDir(), "missing-ffprobe")
+	_, httpServer := newHTTPTestServer(t)
 
 	response := request(t, httpServer, http.MethodGet, "/api/health", "", nil)
 	assertStatus(t, response, http.StatusOK)
 	var health map[string]any
 	decodeResponse(t, response, &health)
-	if health["service"] != "neotranscoder" {
+	if health["service"] != "neosrt" {
 		t.Fatalf("health = %+v", health)
 	}
 
@@ -302,55 +300,12 @@ func TestCoreAPIPositiveAndNegativeLifecycle(t *testing.T) {
 	assertStatus(t, response, http.StatusBadRequest)
 	_ = response.Body.Close()
 
-	response = request(t, httpServer, http.MethodPost, "/api/streams", token, map[string]any{
-		"id": "bad-stream", "input_url": "udp://239.1.1.1:1234",
-		"output_url": "udp://239.2.2.2:1234", "profile_name": "missing-profile",
-	})
-	assertStatus(t, response, http.StatusBadRequest)
-	_ = response.Body.Close()
-	response = request(t, httpServer, http.MethodPost, "/api/streams", token, map[string]any{
-		"id": "channel-1", "name": "Channel 1",
-		"input_url": "udp://239.1.1.1:1234", "output_url": "udp://239.2.2.2:1234",
-		"enabled": true,
-	})
-	assertStatus(t, response, http.StatusOK)
-	_ = response.Body.Close()
-
-	response = request(t, httpServer, http.MethodGet, "/api/streams/channel-1/ffmpeg-command", token, nil)
-	assertStatus(t, response, http.StatusOK)
-	var command struct {
-		Path string   `json:"path"`
-		Args []string `json:"args"`
-	}
-	decodeResponse(t, response, &command)
-	if command.Path != server.cfg.FFmpeg.Path || len(command.Args) == 0 {
-		t.Fatalf("ffmpeg command = %+v", command)
-	}
-	response = request(t, httpServer, http.MethodPost, "/api/streams/channel-1/start", token, nil)
-	assertStatus(t, response, http.StatusBadRequest)
-	_ = response.Body.Close()
-
-	response = request(t, httpServer, http.MethodPost, "/api/probe", token, map[string]any{
-		"input_url": "udp://239.1.1.1:1234",
-	})
-	assertStatus(t, response, http.StatusBadRequest)
-	_ = response.Body.Close()
-
-	response = request(t, httpServer, http.MethodDelete, "/api/streams/channel-1", token, nil)
-	assertStatus(t, response, http.StatusNoContent)
-	_ = response.Body.Close()
-	response = request(t, httpServer, http.MethodDelete, "/api/streams/channel-1", token, nil)
-	assertStatus(t, response, http.StatusNotFound)
-	_ = response.Body.Close()
-	response = request(t, httpServer, http.MethodDelete, "/api/users/operator", token, nil)
-	assertStatus(t, response, http.StatusNoContent)
-	_ = response.Body.Close()
-
-	response = request(t, httpServer, http.MethodGet, "/srt/relays", "", nil)
-	assertStatus(t, response, http.StatusOK)
-	body := readBody(t, response)
-	if !bytes.Contains(body, []byte("<html")) {
-		t.Fatalf("SPA fallback did not return HTML: %.100s", body)
+	for _, endpoint := range []string{"/api/streams", "/api/profiles", "/api/probe", "/api/metrics", "/api/streams/channel-1/start"} {
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			response = request(t, httpServer, method, endpoint, token, nil)
+			assertStatus(t, response, http.StatusNotFound)
+			_ = response.Body.Close()
+		}
 	}
 }
 

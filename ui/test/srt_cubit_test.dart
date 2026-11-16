@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show PointerDeviceKind;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -11,8 +12,50 @@ import 'package:neotranscoder_ui/data/repositories/srt_repository.dart';
 import 'package:neotranscoder_ui/features/srt/srt_client_editor_screen.dart';
 import 'package:neotranscoder_ui/features/srt/srt_cubit.dart';
 import 'package:neotranscoder_ui/features/srt/srt_relay_editor_screen.dart';
+import 'package:neotranscoder_ui/features/srt/srt_relays_screen.dart';
 
 void main() {
+  testWidgets('relay table scrollbar reveals rightmost actions',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final _FakeSrtRepository repository = _FakeSrtRepository()
+      ..relays = List<SrtRelayView>.generate(30, (_) => _relayView());
+    final SrtCubit cubit = SrtCubit(repository: repository);
+    await cubit.load();
+    addTearDown(cubit.close);
+    addTearDown(repository.close);
+    await tester.pumpWidget(MaterialApp(
+      theme: NeoTheme.light(),
+      home: Scaffold(
+        body: BlocProvider<SrtCubit>.value(
+          value: cubit,
+          child: const SingleChildScrollView(child: SrtRelaysScreen()),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    final Finder barFinder = find.byWidgetPredicate((Widget widget) =>
+        widget is Scrollbar &&
+        widget.scrollbarOrientation == ScrollbarOrientation.top);
+    final Scrollbar bar = tester.widget<Scrollbar>(barFinder);
+    expect(bar.thumbVisibility, isTrue);
+    expect(bar.controller!.position.maxScrollExtent, greaterThan(0));
+    expect(find.byTooltip('Edit relay').hitTestable(), findsNothing);
+    final Rect bounds = tester.getRect(barFinder);
+    final TestGesture mouse = await tester.startGesture(
+      Offset(bounds.left + 40, bounds.top + 5),
+      kind: PointerDeviceKind.mouse,
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+    await mouse.moveBy(const Offset(900, 0));
+    await mouse.up();
+    await tester.pumpAndSettle();
+    expect(bar.controller!.offset, greaterThan(0));
+    expect(find.byTooltip('Edit relay').hitTestable(), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
   test('SRT client payload defaults old data to AES and reads no-key mode', () {
     final SrtClient legacy = SrtClient.fromJson(<String, dynamic>{
       'id': 'legacy-payload',

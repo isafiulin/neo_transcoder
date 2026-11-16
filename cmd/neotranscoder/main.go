@@ -32,7 +32,7 @@ func run(args []string) int {
 	case "serve":
 		return serve(args[1:])
 	case "version":
-		fmt.Printf("neotranscoder %s commit=%s date=%s\n", buildinfo.Version, buildinfo.Commit, buildinfo.Date)
+		fmt.Printf("NeoSRT %s commit=%s date=%s\n", buildinfo.Version, buildinfo.Commit, buildinfo.Date)
 		return 0
 	case "doctor":
 		return runDoctor(args[1:])

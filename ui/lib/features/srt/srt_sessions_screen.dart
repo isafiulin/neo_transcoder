@@ -8,6 +8,7 @@ import 'package:neotranscoder_ui/core/widgets/neo_badge.dart';
 import 'package:neotranscoder_ui/core/widgets/neo_panel.dart';
 import 'package:neotranscoder_ui/core/widgets/neo_search_field.dart';
 import 'package:neotranscoder_ui/core/widgets/neo_state.dart';
+import 'package:neotranscoder_ui/core/widgets/neo_table_scroll.dart';
 import 'package:neotranscoder_ui/features/srt/srt_cubit.dart';
 import 'package:neotranscoder_ui/features/srt/srt_format.dart';
 
@@ -146,8 +147,7 @@ class _SrtSessionsScreenState extends State<SrtSessionsScreen> {
 
   Widget _table(List<SrtSession> sessions) {
     return NeoPanel(
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
+      child: NeoTableScroll(
         child: DataTable(
           headingRowHeight: 40,
           columns: const <DataColumn>[

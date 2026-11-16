@@ -180,7 +180,7 @@ if [ "$MODE" = "bundle" ]; then
   done
 fi
 
-echo "NeoTranscoder updated"
+echo "NeoSRT updated"
 echo "old: $OLD_VERSION"
 echo "new: $NEW_VERSION"
 echo "backup: $BACKUP"

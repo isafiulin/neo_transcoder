@@ -3,21 +3,21 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:neotranscoder_ui/core/api/api_client.dart';
-import 'package:neotranscoder_ui/data/repositories/transcoder_repository.dart';
+import 'package:neotranscoder_ui/data/repositories/service_repository.dart';
 import 'router.dart';
 import 'session_cubit.dart';
 import 'theme.dart';
 
-class NeoTranscoderApp extends StatefulWidget {
-  const NeoTranscoderApp({super.key});
+class NeoSrtApp extends StatefulWidget {
+  const NeoSrtApp({super.key});
 
   @override
-  State<NeoTranscoderApp> createState() => _NeoTranscoderAppState();
+  State<NeoSrtApp> createState() => _NeoSrtAppState();
 }
 
-class _NeoTranscoderAppState extends State<NeoTranscoderApp> {
+class _NeoSrtAppState extends State<NeoSrtApp> {
   late final ApiClient _api = ApiClient();
-  late final TranscoderRepository _repository = TranscoderRepository(api: _api);
+  late final ServiceRepository _repository = ServiceRepository(api: _api);
   late final SessionCubit _session = SessionCubit(api: _api)..bootstrap();
   late final GoRouter router = createRouter(_session);
 
@@ -37,12 +37,12 @@ class _NeoTranscoderAppState extends State<NeoTranscoderApp> {
   Widget build(BuildContext context) {
     return MultiRepositoryProvider(
       providers: <RepositoryProvider<dynamic>>[
-        RepositoryProvider<TranscoderRepository>.value(value: _repository),
+        RepositoryProvider<ServiceRepository>.value(value: _repository),
       ],
       child: BlocProvider<SessionCubit>.value(
         value: _session,
         child: MaterialApp.router(
-          title: 'NeoTranscoder',
+          title: 'NeoSRT',
           debugShowCheckedModeBanner: false,
           theme: NeoTheme.light(),
           routerConfig: router,

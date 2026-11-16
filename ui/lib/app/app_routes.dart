@@ -2,8 +2,6 @@ abstract final class AppRoutes {
   static const splash = '/splash';
   static const login = '/login';
   static const dashboard = '/';
-  static const streams = '/streams';
-  static const profiles = '/profiles';
   static const srt = '/srt';
   static const srtRelays = '/srt/relays';
   static const srtRelayNew = '/srt/relays/new';
@@ -13,6 +11,5 @@ abstract final class AppRoutes {
   static String srtClientEdit(String id) => '/srt/clients/$id/edit';
   static const srtSessions = '/srt/sessions';
   static const srtAudit = '/srt/audit';
-  static const logs = '/logs';
   static const settings = '/settings';
 }

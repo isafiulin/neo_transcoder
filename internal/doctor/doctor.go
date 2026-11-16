@@ -19,8 +19,6 @@ type Check struct {
 
 func Run(cfg config.Config) []Check {
 	checks := []Check{
-		fileExecutable("ffmpeg", cfg.FFmpeg.Path),
-		fileExecutable("ffprobe", cfg.FFmpeg.FFprobePath),
 		executableRuns("srt_worker", cfg.SRT.WorkerPath, "version"),
 		dirWritable("storage_dir", filepath.Dir(cfg.Storage.Path)),
 		dirWritable("log_dir", filepath.Dir(cfg.Logs.Path)),

@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestDefaultConfigIsValid(t *testing.T) {
 	if err := Default().Validate(); err != nil {
@@ -19,8 +23,6 @@ func TestConfigRejectsInvalidPort(t *testing.T) {
 func TestConfigRejectsInvalidRequiredAndSRTFields(t *testing.T) {
 	tests := map[string]func(*Config){
 		"bind":            func(cfg *Config) { cfg.Server.Bind = "all" },
-		"ffmpeg":          func(cfg *Config) { cfg.FFmpeg.Path = "" },
-		"ffprobe":         func(cfg *Config) { cfg.FFmpeg.FFprobePath = "" },
 		"worker":          func(cfg *Config) { cfg.SRT.WorkerPath = "" },
 		"SRT state":       func(cfg *Config) { cfg.SRT.StatePath = "" },
 		"SRT master key":  func(cfg *Config) { cfg.SRT.MasterKeyPath = "" },
@@ -37,5 +39,20 @@ func TestConfigRejectsInvalidRequiredAndSRTFields(t *testing.T) {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+func TestLegacyEncoderConfigIsIgnored(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	data := []byte(`{"ffmpeg":{"path":"","ffprobe_path":""},"server":{"bind":"127.0.0.1","port":9090},"srt":{"state_path":"/data/existing-srt.json","master_key_path":"/data/existing.key"}}`)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.Port != 9090 || cfg.SRT.StatePath != "/data/existing-srt.json" || cfg.SRT.MasterKeyPath != "/data/existing.key" {
+		t.Fatalf("legacy settings changed: %+v", cfg)
 	}
 }

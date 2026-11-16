@@ -1,5 +1,5 @@
 [Unit]
-Description=NeoTranscoder multicast transcoder manager
+Description=NeoSRT relay service
 After=network-online.target
 Wants=network-online.target
 
